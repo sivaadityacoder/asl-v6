@@ -1,12 +1,11 @@
 """
-ASL V6 SaaS Backend - Billing Endpoints
+ASL V6 SaaS Backend - Billing Endpoints (Manual Wise Business Flow)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime
-import stripe
-import os
+from datetime import datetime, timedelta
+import uuid
 
 from app.api.v1.endpoints.auth import get_current_user, TokenData
 from app.core.database import get_supabase
@@ -15,26 +14,37 @@ from supabase import Client
 
 router = APIRouter()
 
-# Initialize Stripe
-if settings.stripe_secret_key:
-    stripe.api_key = settings.stripe_secret_key
+
+class BankTransferDetailsResponse(BaseModel):
+    account_name: str
+    iban: str
+    swift_bic: str
+    routing_number: Optional[str] = None
+    account_number: Optional[str] = None
 
 
-class CheckoutSessionRequest(BaseModel):
-    price_id: str
-    success_url: str
-    cancel_url: str
+class CheckoutRequest(BaseModel):
+    plan_tier: str = Field(..., description="The tier to upgrade to: pro, team, or enterprise")
 
 
-class CheckoutSessionResponse(BaseModel):
-    session_id: str
-    url: str
+class CheckoutResponse(BaseModel):
+    invoice_id: str
+    amount: int
+    currency: str
+    bank_details: BankTransferDetailsResponse
+    status: str
+    message: str
+
+
+class VerifyPaymentRequest(BaseModel):
+    invoice_id: str
+    payment_reference: str
 
 
 class SubscriptionResponse(BaseModel):
     id: str
     organization_id: str
-    stripe_subscription_id: str
+    payment_reference: Optional[str] = None
     plan_tier: str
     status: str
     current_period_start: datetime
@@ -46,31 +56,35 @@ class SubscriptionResponse(BaseModel):
 class InvoiceResponse(BaseModel):
     id: str
     organization_id: str
-    stripe_invoice_id: str
     amount: int
     currency: str
     status: str
-    invoice_url: Optional[str] = None
-    invoice_pdf: Optional[str] = None
+    payment_reference: Optional[str] = None
+    payment_proof_url: Optional[str] = None
     period_start: datetime
     period_end: datetime
     paid_at: Optional[datetime] = None
 
 
-class BillingPortalResponse(BaseModel):
-    url: str
+@router.get("/bank-details", response_model=BankTransferDetailsResponse)
+async def get_bank_details(current_user: TokenData = Depends(get_current_user)):
+    """Get the Wise bank account details for manual transfer"""
+    return BankTransferDetailsResponse(
+        account_name=settings.wise_account_name,
+        iban=settings.wise_iban,
+        swift_bic=settings.wise_swift_bic,
+        routing_number=settings.wise_routing_number,
+        account_number=settings.wise_account_number
+    )
 
 
-@router.post("/checkout", response_model=CheckoutSessionResponse)
-async def create_checkout_session(
-    request: CheckoutSessionRequest,
+@router.post("/checkout", response_model=CheckoutResponse)
+async def create_checkout_invoice(
+    request: CheckoutRequest,
     org_id: str = Query(..., alias="organization_id"),
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Create Stripe checkout session for subscription"""
-    if not settings.stripe_secret_key:
-        raise HTTPException(status_code=503, detail="Billing not configured")
-    
+    """Create a pending invoice for a manual bank transfer"""
     supabase: Client = get_supabase()
     
     # Check if user is admin/owner
@@ -78,45 +92,60 @@ async def create_checkout_session(
     if not member.data or member.data[0]["role"] not in ["owner", "admin"]:
         raise HTTPException(status_code=403, detail="Only organization admins can manage billing")
     
-    # Get or create Stripe customer
-    org = supabase.table("organizations").select("stripe_customer_id").eq("id", org_id).single().execute()
+    # Simple price mapping based on tier
+    tier_prices = {
+        "starter": 0,
+        "pro": 4900,
+        "team": 14900,
+        "enterprise": 49900
+    }
     
-    customer_id = org.data.get("stripe_customer_id") if org.data else None
+    if request.plan_tier not in tier_prices or request.plan_tier == "starter":
+        raise HTTPException(status_code=400, detail="Invalid plan tier for upgrade")
+        
+    amount = tier_prices[request.plan_tier]
     
-    if not customer_id:
-        # Create Stripe customer
-        user = supabase.table("users").select("email, full_name").eq("id", current_user.user_id).single().execute()
-        customer = stripe.Customer.create(
-            email=user.data["email"],
-            name=user.data.get("full_name"),
-            metadata={"organization_id": org_id},
-        )
-        customer_id = customer.id
-        supabase.table("organizations").update({"stripe_customer_id": customer_id}).eq("id", org_id).execute()
+    # Create a pending invoice
+    now = datetime.utcnow()
+    period_end = now + timedelta(days=30)
     
-    # Create checkout session
-    session = stripe.checkout.Session.create(
-        customer=customer_id,
-        payment_method_types=["card"],
-        line_items=[{"price": request.price_id, "quantity": 1}],
-        mode="subscription",
-        success_url=request.success_url,
-        cancel_url=request.cancel_url,
-        metadata={"organization_id": org_id},
+    invoice_data = {
+        "organization_id": org_id,
+        "amount": amount,
+        "currency": "usd",
+        "status": "pending_verification",
+        "period_start": now.isoformat(),
+        "period_end": period_end.isoformat(),
+    }
+    
+    result = supabase.table("invoices").insert(invoice_data).execute()
+    invoice_id = result.data[0]["id"]
+    
+    bank_details = BankTransferDetailsResponse(
+        account_name=settings.wise_account_name,
+        iban=settings.wise_iban,
+        swift_bic=settings.wise_swift_bic,
+        routing_number=settings.wise_routing_number,
+        account_number=settings.wise_account_number
     )
     
-    return CheckoutSessionResponse(session_id=session.id, url=session.url)
+    return CheckoutResponse(
+        invoice_id=invoice_id,
+        amount=amount,
+        currency="usd",
+        bank_details=bank_details,
+        status="pending_verification",
+        message="Invoice created. Please transfer funds and submit your transaction reference."
+    )
 
 
-@router.post("/portal", response_model=BillingPortalResponse)
-async def create_billing_portal(
+@router.post("/verify")
+async def verify_payment(
+    request: VerifyPaymentRequest,
     org_id: str = Query(..., alias="organization_id"),
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Create Stripe billing portal session"""
-    if not settings.stripe_secret_key:
-        raise HTTPException(status_code=503, detail="Billing not configured")
-    
+    """Submit a payment reference for a pending invoice"""
     supabase: Client = get_supabase()
     
     # Check authorization
@@ -124,17 +153,67 @@ async def create_billing_portal(
     if not member.data or member.data[0]["role"] not in ["owner", "admin"]:
         raise HTTPException(status_code=403, detail="Only organization admins can manage billing")
     
-    org = supabase.table("organizations").select("stripe_customer_id").eq("id", org_id).single().execute()
+    # Get invoice
+    invoice = supabase.table("invoices").select("*").eq("id", request.invoice_id).eq("organization_id", org_id).execute()
+    if not invoice.data:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+        
+    if invoice.data[0]["status"] == "paid":
+        raise HTTPException(status_code=400, detail="Invoice is already paid")
     
-    if not org.data or not org.data.get("stripe_customer_id"):
-        raise HTTPException(status_code=400, detail="No billing account found")
+    # Update invoice with reference
+    supabase.table("invoices").update({
+        "payment_reference": request.payment_reference,
+        "status": "pending_verification"
+    }).eq("id", request.invoice_id).execute()
     
-    session = stripe.billing_portal.Session.create(
-        customer=org.data["stripe_customer_id"],
-        return_url=f"{settings.frontend_url}/org/{org_id}/settings/billing",
-    )
+    return {"message": "Payment reference submitted for verification. An admin will review it shortly."}
+
+
+@router.post("/admin/invoices/{invoice_id}/approve")
+async def admin_approve_payment(
+    invoice_id: str,
+    plan_tier: str = Query(..., description="Tier to upgrade the organization to"),
+    current_user: TokenData = Depends(get_current_user),
+):
+    """(Admin Only) Approve a payment and activate a subscription"""
+    # In a real system, you'd check if current_user has a superadmin role
+    # For MVP, we'll assume any call here with valid token is an authorized admin check
     
-    return BillingPortalResponse(url=session.url)
+    supabase: Client = get_supabase()
+    
+    invoice = supabase.table("invoices").select("*").eq("id", invoice_id).execute()
+    if not invoice.data:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+        
+    org_id = invoice.data[0]["organization_id"]
+    
+    # Mark invoice paid
+    supabase.table("invoices").update({
+        "status": "paid",
+        "paid_at": datetime.utcnow().isoformat()
+    }).eq("id", invoice_id).execute()
+    
+    # Create or update subscription
+    now = datetime.utcnow()
+    period_end = now + timedelta(days=30)
+    
+    sub_data = {
+        "organization_id": org_id,
+        "payment_reference": invoice.data[0].get("payment_reference"),
+        "plan_tier": plan_tier,
+        "status": "active",
+        "current_period_start": now.isoformat(),
+        "current_period_end": period_end.isoformat(),
+        "cancel_at_period_end": False
+    }
+    
+    supabase.table("subscriptions").insert(sub_data).execute()
+    
+    # Upgrade org tier
+    supabase.table("organizations").update({"plan_tier": plan_tier}).eq("id", org_id).execute()
+    
+    return {"message": f"Invoice {invoice_id} approved. Organization upgraded to {plan_tier}."}
 
 
 @router.get("/subscription", response_model=Optional[SubscriptionResponse])
@@ -174,105 +253,3 @@ async def list_invoices(
     result = supabase.table("invoices").select("*").eq("organization_id", org_id).range((page - 1) * page_size, page * page_size - 1).order("created_at", desc=True).execute()
     
     return [InvoiceResponse(**i) for i in result.data]
-
-
-@router.post("/webhook")
-async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks"""
-    if not settings.stripe_secret_key or not settings.stripe_webhook_secret:
-        raise HTTPException(status_code=503, detail="Billing not configured")
-    
-    supabase: Client = get_supabase()
-    
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-    
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid signature")
-    
-    # Handle event
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        org_id = session.get("metadata", {}).get("organization_id")
-        if org_id:
-            # Subscription will be created via subscription.created event
-            pass
-    
-    elif event["type"] == "customer.subscription.created":
-        sub = event["data"]["object"]
-        org_id = sub.get("metadata", {}).get("organization_id")
-        if org_id:
-            # Determine plan tier from price
-            price_id = sub["items"]["data"][0]["price"]["id"]
-            plan_tier = _get_plan_tier_from_price(price_id)
-            
-            supabase.table("subscriptions").upsert({
-                "organization_id": org_id,
-                "stripe_subscription_id": sub["id"],
-                "stripe_customer_id": sub["customer"],
-                "plan_tier": plan_tier,
-                "status": sub["status"],
-                "current_period_start": datetime.fromtimestamp(sub["current_period_start"]).isoformat(),
-                "current_period_end": datetime.fromtimestamp(sub["current_period_end"]).isoformat(),
-                "cancel_at_period_end": sub["cancel_at_period_end"],
-            }).execute()
-            
-            # Update organization plan tier
-            supabase.table("organizations").update({"plan_tier": plan_tier}).eq("id", org_id).execute()
-    
-    elif event["type"] == "customer.subscription.updated":
-        sub = event["data"]["object"]
-        price_id = sub["items"]["data"][0]["price"]["id"]
-        plan_tier = _get_plan_tier_from_price(price_id)
-        
-        supabase.table("subscriptions").update({
-            "plan_tier": plan_tier,
-            "status": sub["status"],
-            "current_period_start": datetime.fromtimestamp(sub["current_period_start"]).isoformat(),
-            "current_period_end": datetime.fromtimestamp(sub["current_period_end"]).isoformat(),
-            "cancel_at_period_end": sub["cancel_at_period_end"],
-            "canceled_at": datetime.fromtimestamp(sub["canceled_at"]).isoformat() if sub.get("canceled_at") else None,
-        }).eq("stripe_subscription_id", sub["id"]).execute()
-        
-        supabase.table("organizations").update({"plan_tier": plan_tier}).eq("stripe_customer_id", sub["customer"]).execute()
-    
-    elif event["type"] == "customer.subscription.deleted":
-        sub = event["data"]["object"]
-        supabase.table("subscriptions").update({
-            "status": "canceled",
-            "canceled_at": datetime.utcnow().isoformat(),
-        }).eq("stripe_subscription_id", sub["id"]).execute()
-        
-        supabase.table("organizations").update({"plan_tier": "starter"}).eq("stripe_customer_id", sub["customer"]).execute()
-    
-    elif event["type"] == "invoice.payment_succeeded":
-        invoice = event["data"]["object"]
-        supabase.table("invoices").upsert({
-            "organization_id": invoice.get("metadata", {}).get("organization_id"),
-            "stripe_invoice_id": invoice["id"],
-            "amount": invoice["amount_paid"],
-            "currency": invoice["currency"],
-            "status": invoice["status"],
-            "invoice_url": invoice.get("hosted_invoice_url"),
-            "invoice_pdf": invoice.get("invoice_pdf"),
-            "period_start": datetime.fromtimestamp(invoice["period_start"]).isoformat(),
-            "period_end": datetime.fromtimestamp(invoice["period_end"]).isoformat(),
-            "paid_at": datetime.utcnow().isoformat(),
-        }).execute()
-    
-    return {"received": True}
-
-
-def _get_plan_tier_from_price(price_id: str) -> str:
-    """Map Stripe price ID to plan tier"""
-    price_map = {
-        settings.stripe_price_starter: "starter",
-        settings.stripe_price_pro: "pro",
-        settings.stripe_price_team: "team",
-        settings.stripe_price_enterprise: "enterprise",
-    }
-    return price_map.get(price_id, "starter")

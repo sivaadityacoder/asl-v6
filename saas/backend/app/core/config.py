@@ -72,13 +72,12 @@ class Settings(BaseSettings):
     supabase_storage_bucket_logs: str = "logs"
     supabase_storage_bucket_screenshots: str = "screenshots"
     
-    # Billing
-    stripe_secret_key: Optional[str] = Field(default=None, alias="STRIPE_SECRET_KEY")
-    stripe_webhook_secret: Optional[str] = Field(default=None, alias="STRIPE_WEBHOOK_SECRET")
-    stripe_price_starter: Optional[str] = Field(default=None, alias="STRIPE_PRICE_STARTER")
-    stripe_price_pro: Optional[str] = Field(default=None, alias="STRIPE_PRICE_PRO")
-    stripe_price_team: Optional[str] = Field(default=None, alias="STRIPE_PRICE_TEAM")
-    stripe_price_enterprise: Optional[str] = Field(default=None, alias="STRIPE_PRICE_ENTERPRISE")
+    # Billing (Wise Manual)
+    wise_account_name: Optional[str] = Field(default="ASL V6 Platform", alias="WISE_ACCOUNT_NAME")
+    wise_iban: Optional[str] = Field(default="GB12WISE34567890123456", alias="WISE_IBAN")
+    wise_swift_bic: Optional[str] = Field(default="WISEGB2L", alias="WISE_SWIFT_BIC")
+    wise_routing_number: Optional[str] = Field(default="", alias="WISE_ROUTING_NUMBER")
+    wise_account_number: Optional[str] = Field(default="34567890123456", alias="WISE_ACCOUNT_NUMBER")
     
     # Rate Limiting
     rate_limit_requests: int = 100

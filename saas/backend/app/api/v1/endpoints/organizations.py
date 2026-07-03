@@ -36,7 +36,6 @@ class OrganizationResponse(BaseModel):
     logo_url: Optional[str] = None
     owner_id: str
     plan_tier: str
-    stripe_customer_id: Optional[str] = None
     settings: dict
     created_at: datetime
     updated_at: datetime
