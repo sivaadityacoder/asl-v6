@@ -28,8 +28,6 @@ export default function RegisterPage() {
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Invalid email format";
     if (!form.password) e.password = "Password is required";
     else if (form.password.length < 8) e.password = "Password must be at least 8 characters";
-    else if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(form.password))
-      e.password = "Password must contain uppercase, lowercase, and a number";
     if (form.password !== form.confirmPassword) e.confirmPassword = "Passwords do not match";
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -122,7 +120,7 @@ export default function RegisterPage() {
               <p className="text-xs text-destructive">{errors.password}</p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                At least 8 characters with uppercase, lowercase, and a number
+                At least 8 characters
               </p>
             )}
           </div>
