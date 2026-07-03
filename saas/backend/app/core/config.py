@@ -37,15 +37,15 @@ class Settings(BaseSettings):
     supabase_url: str = Field(alias="SUPABASE_URL")
     supabase_anon_key: str = Field(alias="SUPABASE_ANON_KEY")
     supabase_service_role_key: str = Field(alias="SUPABASE_SERVICE_ROLE_KEY")
-    supabase_jwt_secret: str = Field(alias="SUPABASE_JWT_SECRET")
+    supabase_jwt_secret: Optional[str] = Field(default=None, alias="SUPABASE_JWT_SECRET")
     
     # Redis
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     
     # GitHub
-    github_client_id: str = Field(alias="GITHUB_CLIENT_ID")
-    github_client_secret: str = Field(alias="GITHUB_CLIENT_SECRET")
-    github_webhook_secret: str = Field(alias="GITHUB_WEBHOOK_SECRET")
+    github_client_id: Optional[str] = Field(default=None, alias="GITHUB_CLIENT_ID")
+    github_client_secret: Optional[str] = Field(default=None, alias="GITHUB_CLIENT_SECRET")
+    github_webhook_secret: Optional[str] = Field(default=None, alias="GITHUB_WEBHOOK_SECRET")
     github_app_id: Optional[str] = Field(default=None, alias="GITHUB_APP_ID")
     github_app_private_key: Optional[str] = Field(default=None, alias="GITHUB_APP_PRIVATE_KEY")
     
