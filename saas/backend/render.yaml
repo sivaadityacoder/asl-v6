@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: asl-v6-backend
+    env: python
+    region: singapore
+    plan: starter
+    buildCommand: "uv pip install --system -e . 2>/dev/null || pip install --no-cache-dir -e ."
+    startCommand: "gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: APP_NAME
+        value: ASL V6
+      - key: APP_VERSION
+        value: 1.0.0
+      - key: DEBUG
+        value: false
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: CORS_ORIGINS
+        value: '["https://app.adityasecuritylabs.tech", "https://adityasecuritylabs.tech", "http://localhost:3000"]'
+      - key: FRONTEND_URL
+        value: https://app.adityasecuritylabs.tech
+      - key: REDIS_URL
+        sync: false

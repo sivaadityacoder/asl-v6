@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import Navbar from "@/components/landing/Navbar";
 import HeroSection from "@/components/landing/HeroSection";
 import AnimatedTerminal from "@/components/landing/AnimatedTerminal";
@@ -139,10 +140,10 @@ export default function LandingPage() {
               <span className="font-bold tracking-tighter font-display text-lg">ASL V6</span>
             </div>
             <div className="flex gap-8 text-sm text-white/40 font-light">
-              <a href="#" className="hover:text-white transition-colors">Documentation</a>
-              <a href="#" className="hover:text-white transition-colors">Twitter</a>
-              <a href="#" className="hover:text-white transition-colors">GitHub</a>
-              <a href="#" className="hover:text-white transition-colors">Privacy</a>
+              <Link href="/docs" className="hover:text-white transition-colors">Documentation</Link>
+              <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">Twitter</a>
+              <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">GitHub</a>
+              <Link href="/privacy" className="hover:text-white transition-colors">Privacy</Link>
             </div>
             <div className="text-xs text-white/30 font-light">
               © 2026 Aditya Security Labs.

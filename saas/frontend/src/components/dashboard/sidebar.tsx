@@ -2,7 +2,9 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useSession, signOut } from 'next-auth/react';
+import { toast } from 'sonner';
 import { 
   LayoutDashboard, 
   FolderGit, 
@@ -12,24 +14,14 @@ import {
   FileText, 
   Settings, 
   CreditCard,
-  Users,
   Shield,
-  BarChart,
   LogOut,
-  Menu,
-  X,
   ChevronDown,
-  Bell,
-  Search,
-  Sun,
-  Moon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Separator } from '@/components/ui/separator';
-import { ScrollArea } from '@/components/ui/scroll-area';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -46,6 +38,35 @@ const navigation = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
+  const { data: session } = useSession();
+
+  const userName = session?.user?.name || session?.user?.email || 'User';
+  const userEmail = session?.user?.email || 'user@company.com';
+  const userImage = session?.user?.image;
+  const userInitial = (session?.user?.name || session?.user?.email || 'U').charAt(0).toUpperCase();
+
+  async function handleLogout() {
+    try {
+      // Optionally call backend logout to invalidate server-side state
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const token = session?.access_token;
+      if (token) {
+        await fetch(`${API_URL}/api/v1/auth/logout`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      }
+      await signOut({ redirect: false, callbackUrl: "/login" });
+      toast.success("Signed out successfully");
+      router.push("/login");
+      router.refresh();
+    } catch (err) {
+      toast.error("Failed to sign out");
+      // Force redirect anyway
+      router.push("/login");
+    }
+  }
 
   return (
     <aside className={cn(
@@ -99,12 +120,12 @@ export function Sidebar() {
           {!collapsed ? (
             <div className="flex items-center gap-3">
               <Avatar className="h-9 w-9">
-                <AvatarImage src="/avatar.png" alt="User" />
-                <AvatarFallback>U</AvatarFallback>
+                {userImage ? <AvatarImage src={userImage} alt={userName} /> : null}
+                <AvatarFallback>{userInitial}</AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">User Name</p>
-                <p className="text-xs text-muted-foreground truncate">user@company.com</p>
+                <p className="text-sm font-medium truncate">{userName}</p>
+                <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
               </div>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -126,7 +147,7 @@ export function Sidebar() {
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className="text-destructive flex items-center gap-2">
+                  <DropdownMenuItem className="text-destructive flex items-center gap-2" onClick={handleLogout}>
                     <LogOut className="h-4 w-4" />
                     Log out
                   </DropdownMenuItem>
@@ -138,8 +159,8 @@ export function Sidebar() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Avatar className="h-9 w-9">
-                    <AvatarImage src="/avatar.png" alt="User" />
-                    <AvatarFallback>U</AvatarFallback>
+                    {userImage ? <AvatarImage src={userImage} alt={userName} /> : null}
+                    <AvatarFallback>{userInitial}</AvatarFallback>
                   </Avatar>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
@@ -156,7 +177,7 @@ export function Sidebar() {
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className="text-destructive flex items-center gap-2">
+                  <DropdownMenuItem className="text-destructive flex items-center gap-2" onClick={handleLogout}>
                     <LogOut className="h-4 w-4" />
                     Log out
                   </DropdownMenuItem>
