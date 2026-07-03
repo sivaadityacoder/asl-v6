@@ -4,11 +4,13 @@ import CredentialsProvider from "next-auth/providers/credentials";
 declare module "next-auth" {
   interface User {
     access_token?: string;
+    refresh_token?: string;
     role?: string;
     plan_tier?: string;
   }
   interface Session {
     access_token?: string;
+    refresh_token?: string;
     user: User & DefaultSession["user"];
   }
 }
@@ -44,6 +46,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
               name: data.user.full_name,
               image: data.user.avatar_url,
               access_token: data.access_token,
+              refresh_token: data.refresh_token,
               role: data.user.role,
               plan_tier: data.user.plan_tier,
             };
@@ -61,6 +64,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (user) {
         token.id = user.id;
         token.access_token = user.access_token;
+        token.refresh_token = user.refresh_token;
         token.role = user.role;
         token.plan_tier = user.plan_tier;
       }
@@ -72,6 +76,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         session.user.role = token.role as string;
         session.user.plan_tier = token.plan_tier as string;
         session.access_token = token.access_token as string;
+        session.refresh_token = token.refresh_token as string;
       }
       return session;
     },
@@ -79,5 +84,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
-  session: { strategy: "jwt" },
+  session: {
+    strategy: "jwt",
+    // Token expires in 30 days (session cookie); the backend JWT (30 min)
+    // is refreshed client-side using the refresh_token callback.
+    maxAge: 30 * 24 * 60 * 60,
+  },
+  secret: process.env.NEXTAUTH_SECRET || process.env.SECRET_KEY,
 });

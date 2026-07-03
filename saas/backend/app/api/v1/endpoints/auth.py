@@ -406,13 +406,22 @@ async def get_github_oauth_url(redirect_uri: str):
 
 
 # Password reset
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+    token: str
+
+
 @router.post("/forgot-password")
-async def forgot_password(email: EmailStr):
+async def forgot_password(request: ForgotPasswordRequest):
     """Request password reset"""
     supabase: Client = get_supabase()
     
     try:
-        supabase.auth.reset_password_email(email)
+        supabase.auth.reset_password_email(request.email)
         return {"message": "Password reset email sent"}
     except Exception:
         # Don't reveal if email exists
@@ -420,12 +429,12 @@ async def forgot_password(email: EmailStr):
 
 
 @router.post("/reset-password")
-async def reset_password(new_password: str, token: str):
+async def reset_password(request: ResetPasswordRequest):
     """Reset password with token"""
     supabase: Client = get_supabase()
     
     try:
-        supabase.auth.update_user({"password": new_password}, token=token)
+        supabase.auth.update_user({"password": request.new_password}, token=request.token)
         return {"message": "Password reset successful"}
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
