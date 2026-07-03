@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_findings_severity ON public.findings(severity);
 CREATE INDEX IF NOT EXISTS idx_findings_status ON public.findings(status);
 
 -- Add trigger for findings
-CREATE TRIGGER update_findings_updated_at 
+CREATE OR REPLACE TRIGGER update_findings_updated_at 
   BEFORE UPDATE ON public.findings 
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
