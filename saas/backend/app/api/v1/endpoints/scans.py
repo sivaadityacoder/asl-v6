@@ -154,9 +154,9 @@ async def create_scan(
     
     supabase.table("scan_layers").insert(layers).execute()
     
-    # Queue the scan task (Celery)
-    # background_tasks.add_task(queue_scan_task, scan_id)
-    # For now, just return the scan
+    # Queue the scan task (FastAPI BackgroundTasks instead of Celery)
+    from app.scan.worker import run_scan_background
+    background_tasks.add_task(run_scan_background, scan_id, repo.data["url"])
     
     return ScanResponse(**result.data[0])
 
