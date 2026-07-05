@@ -195,7 +195,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ──────────────────────────────────────────────────────────────────────────────
-  # Deploy Backend to Fly.io
+  # Deploy Backend to Azure App Service
   # ──────────────────────────────────────────────────────────────────────────────
   deploy-backend:
     needs: [backend-build, supabase-migrate]
@@ -204,41 +204,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Fly CLI
-        uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Login to Azure
+        uses: azure/login@v2
         with:
-          flyctl-version: 'latest'
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set Fly secrets
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: app-aslv6-prod-3600
+          package: ./v6/saas/backend
+
+      - name: Set Azure App Settings
         run: |
-          flyctl secrets set \
-            SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
-            SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}" \
-            SUPABASE_SERVICE_ROLE_KEY="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            SUPABASE_JWT_SECRET="${{ secrets.SUPABASE_JWT_SECRET }}" \
-            REDIS_URL="${{ secrets.REDIS_URL }}" \
-            GITHUB_CLIENT_ID="${{ secrets.GITHUB_CLIENT_ID }}" \
-            GITHUB_CLIENT_SECRET="${{ secrets.GITHUB_CLIENT_SECRET }}" \
-            GITHUB_WEBHOOK_SECRET="${{ secrets.GITHUB_WEBHOOK_SECRET }}" \
-            NVIDIA_API_KEY="${{ secrets.NVIDIA_API_KEY }}" \
-            CELERY_BROKER_URL="${{ secrets.CELERY_BROKER_URL }}" \
-            CELERY_RESULT_BACKEND="${{ secrets.CELERY_RESULT_BACKEND }}" \
-            SECRET_KEY="${{ secrets.SECRET_KEY }}" \
-            STRIPE_SECRET_KEY="${{ secrets.STRIPE_SECRET_KEY }}" \
-            STRIPE_WEBHOOK_SECRET="${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
-            --app asl-v6-backend
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          az webapp config appsettings set \
+            --name app-aslv6-prod-3600 \
+            --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+            --settings \
+              SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
+              SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}" \
+              SUPABASE_SERVICE_ROLE_KEY="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+              SUPABASE_JWT_SECRET="${{ secrets.SUPABASE_JWT_SECRET }}" \
+              GITHUB_CLIENT_ID="${{ secrets.GITHUB_CLIENT_ID }}" \
+              GITHUB_CLIENT_SECRET="${{ secrets.GITHUB_CLIENT_SECRET }}" \
+              GITHUB_WEBHOOK_SECRET="${{ secrets.GITHUB_WEBHOOK_SECRET }}" \
+              NVIDIA_API_KEY="${{ secrets.NVIDIA_API_KEY }}" \
+              SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+              STRIPE_SECRET_KEY="${{ secrets.STRIPE_SECRET_KEY }}" \
+              STRIPE_WEBHOOK_SECRET="${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
+              ENVIRONMENT="production" \
+              FRONTEND_URL="https://app.adityasecuritylabs.tech"
 
-      - name: Deploy to Fly.io
-        run: flyctl deploy --config ./v6/saas/infrastructure/fly/fly.toml --strategy rolling
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-      - name: Verify health check
+      - name: Verify Azure health check
         run: |
-          sleep 15
-          curl -f https://asl-v6-backend.fly.dev/health || echo "Health check pending..."
+          sleep 20
+          curl -f https://app-aslv6-prod-3600.azurewebsites.net/health || echo "Health check pending..."
 
   # ──────────────────────────────────────────────────────────────────────────────
   # Deploy Frontend to Vercel
@@ -263,7 +263,7 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          NEXT_PUBLIC_API_URL: https://asl-v6-backend.fly.dev
+          NEXT_PUBLIC_API_URL: https://app-aslv6-prod-3600.azurewebsites.net
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
