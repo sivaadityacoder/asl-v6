@@ -13,6 +13,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Allow Next.js frontend lib/ directory (contains api.ts, utils.ts etc.)
+!saas/frontend/src/lib/
 parts/
 sdist/
 var/
@@ -51,3 +53,4 @@ build/
 
 # Mock Repos
 mock_repos/
+.vercel
