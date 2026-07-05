@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const path = require('path');
+
 const nextConfig = {
   reactStrictMode: true,
   images: {
@@ -19,6 +21,11 @@ const nextConfig = {
   experimental: {
     serverActions: {
       bodySizeLimit: '2mb',
+    },
+  },
+  turbopack: {
+    resolveAlias: {
+      '@': path.resolve(__dirname, 'src'),
     },
   },
 };
