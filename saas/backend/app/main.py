@@ -86,7 +86,7 @@ app.add_middleware(
 if not settings.debug:
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["api.aslv6.com", "*.aslv6.com", "localhost"],
+        allowed_hosts=["api.aslv6.com", "*.aslv6.com", "localhost", "*.azurewebsites.net"],
     )
 
 

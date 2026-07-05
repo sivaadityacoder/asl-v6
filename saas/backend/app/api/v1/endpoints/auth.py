@@ -32,9 +32,11 @@ class TokenData(BaseModel):
     email: Optional[str] = None
 
 
+from pydantic import BaseModel, EmailStr, Field
+
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8)
     full_name: Optional[str] = None
 
 
@@ -166,7 +168,9 @@ async def login(user_data: UserLogin):
     supabase: Client = get_supabase()
     
     try:
-        auth_response = supabase.auth.sign_in_with_password({
+        from supabase import create_client
+        fresh_client = create_client(settings.supabase_url, settings.supabase_anon_key)
+        auth_response = fresh_client.auth.sign_in_with_password({
             "email": user_data.email,
             "password": user_data.password,
         })

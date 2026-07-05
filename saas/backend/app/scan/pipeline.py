@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import shutil
+
 import subprocess
 import tempfile
 import uuid
@@ -26,6 +27,17 @@ from app.scan.false_positive_reducer import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def safe_read_file(filepath: str, max_size: int = 1_000_000) -> str:
+    """Read a file safely, preventing OOM by skipping files larger than max_size bytes."""
+    try:
+        if os.path.exists(filepath) and os.path.getsize(filepath) < max_size:
+            with open(filepath, encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except OSError:
+        pass
+    return ""
 
 
 class ScanStatus(str, Enum):
@@ -142,15 +154,16 @@ class RepositoryDiscovery:
                     yaml_files.append(rel)
 
                 try:
-                    with open(fpath, encoding="utf-8", errors="ignore") as fh:
-                        total_lines += sum(1 for _ in fh)
+                    if os.path.getsize(fpath) < 1_000_000:
+                        with open(fpath, encoding="utf-8", errors="ignore") as fh:
+                            total_lines += sum(1 for _ in fh)
                 except OSError:
                     pass
 
         # Detect AI frameworks
         detected: list[AIFramework] = []
         all_source = " ".join(
-            open(os.path.join(target_dir, f), encoding="utf-8", errors="ignore").read()
+            safe_read_file(os.path.join(target_dir, f))
             for f in python_files[:50]  # sample first 50 files
         )
         for framework, sigs in self.FRAMEWORK_SIGNATURES.items():
@@ -252,7 +265,8 @@ class StaticAnalyzer:
         for rel_path in profile.python_files:
             abs_path = os.path.join(profile.local_path, rel_path)
             try:
-                content = open(abs_path, encoding="utf-8", errors="ignore").read()
+                content = safe_read_file(abs_path)
+                if not content: continue
                 findings = self._scan_file(rel_path, content, layer="ast")
                 all_findings.extend(findings)
             except OSError:
@@ -273,7 +287,7 @@ class StaticAnalyzer:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
             import json
             data = json.loads(stdout)
             findings: list[RawFinding] = []
@@ -311,7 +325,8 @@ class SecretsScanner:
             for rel_path in profile.python_files:
                 abs_path = os.path.join(profile.local_path, rel_path)
                 try:
-                    content = open(abs_path, encoding="utf-8", errors="ignore").read()
+                    content = safe_read_file(abs_path)
+                    if not content: continue
                     for pattern, vuln_class, severity in analyzer.SECRET_PATTERNS:
                         for i, line in enumerate(content.split("\n"), 1):
                             if re.search(pattern, line):
@@ -382,7 +397,8 @@ class ReachabilityAnalyzer:
         for rel in profile.python_files:
             abs_path = os.path.join(profile.local_path, rel)
             try:
-                content = open(abs_path, encoding="utf-8", errors="ignore").read()
+                content = safe_read_file(abs_path)
+                if not content: continue
                 for pat in ep_patterns:
                     if re.search(pat, content):
                         entry_points.append(rel)
@@ -446,12 +462,26 @@ class SpecialistAgentRunner:
                 (r'eval\s*\(.*(?:llm|response|output|result)', "critical"),
                 (r'exec\s*\(.*(?:llm|response|output)', "critical"),
             ],
+            "infrastructure_security": [
+                (r'USER\s+root', "high"),
+                (r'privileged:\s*true', "critical"),
+                (r'--cap-add\s+ALL', "critical"),
+                (r'0\.0\.0\.0/0', "medium"),
+            ],
         }
         patterns = agent_patterns.get(vuln_class, [])
-        for rel_path in profile.python_files[:100]:  # limit per agent
+        
+        files_to_scan = profile.python_files[:100]
+        if vuln_class == "infrastructure_security":
+            files_to_scan = (profile.python_files + profile.yaml_files + ["Dockerfile", "docker-compose.yml"])[:150]
+
+        for rel_path in files_to_scan:
             abs_path = os.path.join(profile.local_path, rel_path)
+            if not os.path.exists(abs_path):
+                continue
             try:
-                content = open(abs_path, encoding="utf-8", errors="ignore").read()
+                content = safe_read_file(abs_path)
+                if not content: continue
                 for i, line in enumerate(content.split("\n"), 1):
                     for pattern, severity in patterns:
                         if re.search(pattern, line, re.IGNORECASE):
@@ -550,13 +580,10 @@ class ScanPipeline:
             # Collect source contexts for reachability checks
             source_contexts: dict[str, str] = {}
             for rel in profile.python_files:
-                try:
-                    source_contexts[rel] = open(
-                        os.path.join(profile.local_path, rel),
-                        encoding="utf-8", errors="ignore"
-                    ).read()
-                except OSError:
-                    pass
+                abs_path = os.path.join(profile.local_path, rel)
+                content = safe_read_file(abs_path)
+                if content:
+                    source_contexts[rel] = content
 
             reducer = FalsePositiveReducer(
                 nvidia_api_key=self.nvidia_api_key,

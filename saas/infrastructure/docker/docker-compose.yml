@@ -55,7 +55,7 @@ services:
       - ../backend:/app
     depends_on:
       - redis
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.services.scan_worker worker --loglevel=info --concurrency=4
 
   # Celery Beat for scheduled tasks
   beat:

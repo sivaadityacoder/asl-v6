@@ -90,5 +90,5 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     // is refreshed client-side using the refresh_token callback.
     maxAge: 30 * 24 * 60 * 60,
   },
-  secret: process.env.NEXTAUTH_SECRET || process.env.SECRET_KEY,
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || process.env.SECRET_KEY,
 });

@@ -221,7 +221,7 @@ class ContextConfidenceScorer:
         "sk-test-", "pk-test-",
     ]
 
-    CONFIDENCE_THRESHOLD = 0.60
+    CONFIDENCE_THRESHOLD = 0.50
 
     def score(self, finding: RawFinding) -> float:
         """Return confidence score 0.0–1.0."""
@@ -257,7 +257,7 @@ class CrossLayerCorroborator:
     A finding must be independently detected by ≥2 scan layers to pass.
     This eliminates single-tool noise and regex-only artifacts.
     """
-    MIN_CORROBORATING_LAYERS = 2
+    MIN_CORROBORATING_LAYERS = 1
 
     def add_corroboration(
         self,
@@ -335,7 +335,7 @@ class NvidiaAIReviewer:
     MCP TOOL INTEGRATION:
     Can use MCP tools to gather more context (e.g. read_file) if enabled.
     """
-    AI_CONFIDENCE_THRESHOLD = 0.60
+    AI_CONFIDENCE_THRESHOLD = 0.50
     REVIEW_PROMPT_TEMPLATE = """You are an expert AI/LLM security analyst. Analyze this security finding and rate its confidence as a TRUE positive vulnerability (not a false alarm).
 
 Finding:

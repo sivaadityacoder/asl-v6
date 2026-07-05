@@ -58,8 +58,9 @@ function LoginContent() {
         toast.error("Invalid email or password");
       } else if (result?.ok) {
         toast.success("Welcome back! Redirecting...");
-        router.push(callbackUrl);
-        router.refresh();
+        // Use hard navigation so the JWT cookie is committed before
+        // the middleware runs — prevents the login redirect loop.
+        window.location.href = callbackUrl;
       } else {
         toast.error("Login failed. Please try again.");
       }
