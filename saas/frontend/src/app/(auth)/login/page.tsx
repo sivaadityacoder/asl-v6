@@ -92,22 +92,23 @@ function LoginContent() {
 
     setLoading(true);
     try {
-      const credentials: any = {
+      const signinPayload: Record<string, string> = {
         email: form.email,
-        redirect: false,
+        redirect: "false",
       };
-      
+
       if (loginMethod === "password") {
-        credentials.password = form.password;
+        signinPayload.password = form.password;
       } else if (loginMethod === "otp") {
-        credentials.otp = form.otp;
+        signinPayload.otp = form.otp;
       }
 
-      const result = await signIn("credentials", credentials);
+      const result = await signIn("credentials", { ...signinPayload, redirect: false });
+      const signInResult = result as { error?: string; ok?: boolean } | undefined;
 
-      if (result?.error) {
+      if (signInResult?.error) {
         toast.error("Invalid credentials or expired code");
-      } else if (result?.ok) {
+      } else if (signInResult?.ok) {
         toast.success("Welcome back! Redirecting...");
         window.location.href = callbackUrl;
       } else {
