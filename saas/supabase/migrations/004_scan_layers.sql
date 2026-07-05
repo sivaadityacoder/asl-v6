@@ -1,5 +1,5 @@
 CREATE TABLE public.scan_layers (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     scan_id UUID NOT NULL REFERENCES public.scans(id) ON DELETE CASCADE,
     layer_number INTEGER NOT NULL,
     name TEXT NOT NULL,
