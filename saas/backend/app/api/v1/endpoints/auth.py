@@ -204,6 +204,81 @@ async def login(user_data: UserLogin):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
+class OTPRequest(BaseModel):
+    email: EmailStr
+
+class OTPVerifyRequest(BaseModel):
+    email: EmailStr
+    token: str
+
+
+@router.post("/otp/request")
+async def request_otp(request: OTPRequest):
+    """Request magic link / OTP"""
+    try:
+        from supabase import create_client
+        fresh_client = create_client(settings.supabase_url, settings.supabase_anon_key)
+        res = fresh_client.auth.sign_in_with_otp({"email": request.email})
+        return {"message": "OTP sent successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Failed to send OTP")
+
+
+@router.post("/otp/verify", response_model=AuthResponse)
+async def verify_otp(request: OTPVerifyRequest):
+    """Verify OTP and issue tokens"""
+    supabase: Client = get_supabase()
+    
+    try:
+        from supabase import create_client
+        fresh_client = create_client(settings.supabase_url, settings.supabase_anon_key)
+        auth_response = fresh_client.auth.verify_otp({
+            "email": request.email, 
+            "token": request.token, 
+            "type": "email"
+        })
+        
+        if not auth_response.user:
+            raise HTTPException(status_code=401, detail="Invalid OTP")
+        
+        # Check if user profile exists, if not create one
+        profile = supabase.table("users").select("*").eq("id", auth_response.user.id).execute()
+        
+        if not profile.data:
+            user_profile = {
+                "id": auth_response.user.id,
+                "email": request.email,
+                "full_name": None,
+                "role": "member",
+                "plan_tier": "starter",
+                "is_active": True,
+            }
+            supabase.table("users").insert(user_profile).execute()
+            profile_data = user_profile
+        else:
+            profile_data = profile.data[0]
+        
+        access_token = create_access_token({"sub": auth_response.user.id, "email": request.email})
+        refresh_token = create_refresh_token({"sub": auth_response.user.id, "email": request.email})
+        
+        return AuthResponse(
+            user=UserResponse(
+                id=auth_response.user.id,
+                email=auth_response.user.email,
+                full_name=profile_data.get("full_name"),
+                avatar_url=profile_data.get("avatar_url"),
+                github_username=profile_data.get("github_username"),
+                role=profile_data.get("role", "member"),
+                plan_tier=profile_data.get("plan_tier", "starter"),
+                is_active=profile_data.get("is_active", True),
+            ),
+            access_token=access_token,
+            refresh_token=refresh_token,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid or expired OTP")
+
+
 @router.post("/github", response_model=AuthResponse)
 async def github_auth(auth_data: GitHubAuthRequest):
     """Authenticate with GitHub OAuth"""

@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Loader2, ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Loader2, ArrowLeft, Eye, EyeOff, Mail } from "lucide-react";
 
 function LoginContent() {
   const router = useRouter();
@@ -20,8 +21,10 @@ function LoginContent() {
 
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [form, setForm] = useState({ email: "", password: "" });
+  const [form, setForm] = useState({ email: "", password: "", otp: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [otpSent, setOtpSent] = useState(false);
+  const [loginMethod, setLoginMethod] = useState("password");
 
   React.useEffect(() => {
     if (justRegistered) {
@@ -34,32 +37,78 @@ function LoginContent() {
     }
   }, [justRegistered, errorParam]);
 
-  function validate(): boolean {
-    const e: Record<string, string> = {};
-    if (!form.email.trim()) e.email = "Email is required";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Invalid email format";
-    if (!form.password) e.password = "Password is required";
-    setErrors(e);
-    return Object.keys(e).length === 0;
+  function validateEmail(): boolean {
+    if (!form.email.trim()) {
+      setErrors({ email: "Email is required" });
+      return false;
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      setErrors({ email: "Invalid email format" });
+      return false;
+    }
+    setErrors({});
+    return true;
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSendOTP(e: React.FormEvent) {
     e.preventDefault();
-    if (!validate()) return;
+    if (!validateEmail()) return;
+    
     setLoading(true);
     try {
-      const result = await signIn("credentials", {
-        email: form.email,
-        password: form.password,
-        redirect: false,
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${API_URL}/api/v1/auth/otp/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: form.email }),
       });
+      
+      if (res.ok) {
+        setOtpSent(true);
+        toast.success("Authentication code sent to your email!");
+      } else {
+        toast.error("Failed to send code. Please try again.");
+      }
+    } catch (err) {
+      toast.error("Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    
+    if (!validateEmail()) return;
+    
+    if (loginMethod === "password" && !form.password) {
+      setErrors({ password: "Password is required" });
+      return;
+    }
+    
+    if (loginMethod === "otp" && otpSent && !form.otp) {
+      setErrors({ otp: "Authentication code is required" });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const credentials: any = {
+        email: form.email,
+        redirect: false,
+      };
+      
+      if (loginMethod === "password") {
+        credentials.password = form.password;
+      } else if (loginMethod === "otp") {
+        credentials.otp = form.otp;
+      }
+
+      const result = await signIn("credentials", credentials);
 
       if (result?.error) {
-        toast.error("Invalid email or password");
+        toast.error("Invalid credentials or expired code");
       } else if (result?.ok) {
         toast.success("Welcome back! Redirecting...");
-        // Use hard navigation so the JWT cookie is committed before
-        // the middleware runs — prevents the login redirect loop.
         window.location.href = callbackUrl;
       } else {
         toast.error("Login failed. Please try again.");
@@ -83,7 +132,15 @@ function LoginContent() {
             ✓ Account created successfully. Please sign in below.
           </div>
         )}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        
+        <Tabs defaultValue="password" value={loginMethod} onValueChange={setLoginMethod} className="w-full mb-6">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="password">Password</TabsTrigger>
+            <TabsTrigger value="otp">Magic Link</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <form onSubmit={loginMethod === "password" || (loginMethod === "otp" && otpSent) ? handleLogin : handleSendOTP} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input
@@ -92,50 +149,82 @@ function LoginContent() {
               placeholder="you@company.com"
               value={form.email}
               onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
-              disabled={loading}
+              disabled={loading || (loginMethod === "otp" && otpSent)}
               autoComplete="email"
             />
             {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="password">Password</Label>
-              <Link
-                href="/forgot-password"
-                className="text-xs text-primary hover:underline"
-              >
-                Forgot password?
-              </Link>
+          {loginMethod === "password" && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password">Password</Label>
+                <Link href="/forgot-password" className="text-xs text-primary hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={form.password}
+                  onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))}
+                  disabled={loading}
+                  autoComplete="current-password"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
             </div>
-            <div className="relative">
+          )}
+
+          {loginMethod === "otp" && otpSent && (
+            <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+              <Label htmlFor="otp">Authentication Code</Label>
               <Input
-                id="password"
-                type={showPassword ? "text" : "password"}
-                placeholder="••••••••"
-                value={form.password}
-                onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))}
+                id="otp"
+                type="text"
+                placeholder="123456"
+                value={form.otp}
+                onChange={(e) => setForm((p) => ({ ...p, otp: e.target.value }))}
                 disabled={loading}
-                autoComplete="current-password"
-                className="pr-10"
+                autoComplete="one-time-code"
+                maxLength={6}
+                className="tracking-widest text-center text-lg"
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword((s) => !s)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                tabIndex={-1}
-              >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
+              {errors.otp && <p className="text-xs text-destructive">{errors.otp}</p>}
+              <div className="text-xs text-center mt-2 text-muted-foreground">
+                Didn't receive a code?{" "}
+                <button 
+                  type="button" 
+                  onClick={() => { setOtpSent(false); setForm(p => ({...p, otp: ""})); }}
+                  className="text-primary hover:underline"
+                >
+                  Try another email
+                </button>
+              </div>
             </div>
-            {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
-          </div>
+          )}
 
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Signing in...
+                {loginMethod === "otp" && !otpSent ? "Sending..." : "Signing in..."}
+              </>
+            ) : loginMethod === "otp" && !otpSent ? (
+              <>
+                <Mail className="mr-2 h-4 w-4" />
+                Send Login Code
               </>
             ) : (
               "Sign In"
