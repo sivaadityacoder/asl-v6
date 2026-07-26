@@ -1,6 +1,6 @@
 # ASL V6 — Open-Source AI Red-Teaming & Exploit Verification Engine
 
-> 🔴 **Currently accepting 3 advisory clients for Q3 2026.** [Email me](mailto:adityasecuritylabs@gmail.com) or [DM on LinkedIn](https://linkedin.com/in/sivaaditya).
+> 🔴 **Currently accepting 3 advisory clients for Q3 2026.** [Email me](mailto:adityasecuritylabs@gmail.com) or [DM on LinkedIn](https://www.linkedin.com/in/sivaaditya-panuganti-b67484316/).
 
 **Author:** Siva Aditya Panuganti (Security Researcher)  
 **Track Record:** 6+ CVEs and GHSAs in production AI systems via responsible disclosure to BSI Germany, CERT-EE, and GitHub Security:
