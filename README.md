@@ -70,4 +70,4 @@ An automated scanner helps find known patterns, but securing custom agent archit
 * **Emergency Security Assessment ($5,000 fixed):** 1-week pre-launch code audit or post-incident review with proof-of-concept exploits and remediation guidance.
 * **EU AI Act Technical Documentation ($3,500 - $5,000 fixed):** Technical robustness testing and adversarial documentation for European compliance.
 
-**Contact:** siva@adityasecuritylabs.com | [GitHub Profile](https://github.com/sivaadityacoder)
+**Contact:** adityasecuritylabs@gmail.com | [GitHub Profile](https://github.com/sivaadityacoder)
