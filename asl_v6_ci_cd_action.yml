@@ -29,7 +29,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install ASL V6 Scanner & Dependencies
+      - name: Install ASL V6 Engine Install ASL V6 Engine Scanner & Dependencies Dependencies Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install rich requests pydantic urllib3

@@ -205,7 +205,7 @@ class RealAISecurityBenchmark:
 
 ## Executive Summary
 
-This report documents the actual live execution of the ASL V6 AI security scanner across real repository targets. No simulated metrics or synthetic benchmark numbers are used.
+This report documents the actual live execution of the ASL V6 AI red-teaming engine across real repository targets. No simulated metrics or synthetic benchmark numbers are used.
 
 ### Real Aggregate Metrics
 * **Total Source Files Scanned:** {t_files:,}

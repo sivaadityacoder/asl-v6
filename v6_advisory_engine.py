@@ -113,7 +113,7 @@ class SubscriptionManager:
             table.add_column("Advisory Retainer\n($2,500 / month)", justify="center", style="green", width=20)
             table.add_column("Emergency Sprint\n($5,000 Fixed)", justify="center", style="bold magenta", width=20)
             
-            table.add_row("ASL V6 Scanner (10 Agents + AST Gauntlet)", "✅ Full Free Access", "✅ Automated CI/CD Gate", "✅ Automated CI/CD Gate")
+            table.add_row("ASL V6 Engine (10 Agents + AST Gauntlet)", "✅ Full Free Access", "✅ Automated CI/CD Gate", "✅ Automated CI/CD Gate")
             table.add_row("Live Docker DAST Sandbox Exploit Proof", "✅ Full Free Access", "✅ Continuous Runtime Probing", "✅ Continuous Runtime Probing")
             table.add_row("Manual Architecture Deep-Dive Review", "❌ Tool Only", "✅ 4 Hrs/Month Deep-Dive", "✅ Full Pre-Launch Audit")
             table.add_row("Custom Patch Synthesis & Remediation PRs", "❌ Tool Only", "✅ Researcher Written Fixes", "✅ Full Remediated Codebase")
