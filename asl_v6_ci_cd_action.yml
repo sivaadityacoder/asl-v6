@@ -1,0 +1,51 @@
+name: ASL V6 AI Security CI/CD Gate
+# Enterprise Subscription CI/CD Integration Template
+# Author: Siva Aditya Panuganti (Security Researcher | 6+ AI CVEs)
+
+on:
+  pull_request:
+    branches: [ main, master, staging ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  ai-security-audit:
+    name: ASL V6 Vulnerability & Red-Team Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # For GitHub Advanced Security SARIF reporting
+      pull-requests: write # For commenting automated fixes on PRs
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install ASL V6 Scanner & Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install rich requests pydantic urllib3
+
+      - name: Execute ASL V6 Verification Gauntlet Scan
+        env:
+          ASL_LICENSE_KEY: ${{ secrets.ASL_LICENSE_KEY }} # B2B Commercial Subscription Key
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}   # For Layer 10 AI Patch Synthesis
+        run: |
+          echo "🔒 Running ASL V6 AI Security Assessment..."
+          python3 v6_ai_infra_security.py ./
+
+      - name: Upload ASL V6 Executive Security Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: asl-v6-security-report
+          path: reports/ASL_V6_REPORT_*.md
+          retention-days: 30

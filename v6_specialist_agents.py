@@ -18,8 +18,9 @@ Agents implemented:
 import sys
 import json
 import re
+import ast
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Set, Tuple
 from datetime import datetime
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "v2"))
@@ -34,6 +35,49 @@ except ImportError:
     def Panel(*args, **kwargs): return ""
 
 console = Console()
+
+# ─────────────────────────────────────────────────────────────────────
+# AST & FALSE POSITIVE ELIMINATION HELPER
+# ─────────────────────────────────────────────────────────────────────
+
+class ASTContextFilter:
+    """Helper class to eliminate false positives using AST parsing and context analysis."""
+    @staticmethod
+    def is_test_file(file_path: str) -> bool:
+        if not file_path:
+            return False
+        fp = file_path.lower().replace("\\", "/")
+        test_indicators = [
+            "/tests/", "/test/", "/spec/", "/specs/", "/unit_tests/", "/integration_tests/",
+            "test_", "_test.py", "conftest.py", "mock_", "/fixtures/", "/testing/",
+            "/examples/", "/demo/", "/benchmarks/", ".github/", "/docs/",
+            ".yml", ".yaml", ".md", ".json", ".toml", ".lock", ".txt", ".ini", ".cfg", ".html"
+        ]
+        return any(ind in fp for ind in test_indicators)
+
+    @staticmethod
+    def is_in_comment_or_docstring(code: str, line_num: int) -> bool:
+        lines = code.splitlines()
+        if 0 < line_num <= len(lines):
+            line_text = lines[line_num - 1].strip()
+            if line_text.startswith("#") or line_text.startswith("//") or line_text.startswith("/*") or line_text.startswith("*") or line_text.startswith('"""') or line_text.startswith("'''"):
+                return True
+        # Check AST for Python docstrings
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+                    if (node.body and isinstance(node.body[0], ast.Expr) and 
+                        isinstance(node.body[0].value, ast.Constant) and 
+                        isinstance(node.body[0].value.value, str)):
+                        doc_node = node.body[0]
+                        if hasattr(doc_node, 'lineno') and hasattr(doc_node, 'end_lineno'):
+                            if doc_node.lineno <= line_num <= (doc_node.end_lineno or doc_node.lineno):
+                                return True
+        except Exception:
+            pass
+        return False
+
 
 # ─────────────────────────────────────────────────────────────────────
 # SPECIALIST AGENT 1: Prompt Injection Hunter
@@ -837,6 +881,339 @@ class ModelDataPoisoningDetector:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# SPECIALIST AGENT 6: Sensitive Data Leakage Scanner
+# ─────────────────────────────────────────────────────────────────────
+
+class SensitiveDataLeakageScanner:
+    """
+    OWASP LLM02: Sensitive Information Disclosure
+    
+    Detects: Hardcoded secrets/API keys, PII logging in LLM interactions, training data memorization risks
+    """
+    AGENT_ID = "DAT-06"
+    DISPLAY_NAME = "🔐 Sensitive Data Leakage Scanner"
+    
+    SECRET_PATTERNS = [
+        (r'(api[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token)\s*[=:]\s*["\']([A-Za-z0-9_\-\.\+]{16,})["\']', "Hardcoded API Key / Secret Token"),
+        (r'OPENAI_API_KEY\s*[=:]\s*["\']sk-[A-Za-z0-9_\-]{20,}', "Hardcoded OpenAI API Key"),
+        (r'ANTHROPIC_API_KEY\s*[=:]\s*["\']sk-ant-[A-Za-z0-9_\-]{20,}', "Hardcoded Anthropic API Key"),
+        (r'AWS_SECRET_ACCESS_KEY\s*[=:]\s*["\'][A-Za-z0-9/+=]{40}["\']', "Hardcoded AWS Secret Access Key"),
+    ]
+    
+    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+        findings = []
+        if ASTContextFilter.is_test_file(file_path):
+            return findings
+            
+        for pattern, desc in self.SECRET_PATTERNS:
+            for match in re.finditer(pattern, code_context, re.IGNORECASE):
+                line_num = code_context[:match.start()].count('\n') + 1
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    continue
+                confidence = self._calculate_secret_confidence(code_context, match)
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": f"Sensitive Data Exposure: {desc}",
+                    "category": "LLM02: Sensitive Information Disclosure",
+                    "severity": self._confidence_to_severity(confidence, "High"),
+                    "cvss_score": self._confidence_to_cvss(confidence, "High"),
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": match.group(0)[:80],
+                    "description": f"Code contains what appears to be a {desc}. Hardcoded secrets in AI pipelines can be leaked via model artifacts or logs.",
+                    "remediation": "Store secrets in environment variables or a dedicated secrets manager (e.g., HashiCorp Vault, AWS Secrets Manager). Never commit credentials to source control.",
+                    "cwe_id": "CWE-798",
+                    "owasp_llm_id": "LLM02:2025",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": confidence < 75
+                })
+        
+        # Check for unmasked PII logging in LLM responses/prompts
+        if re.search(r'(logger|logging|print|log)\.(info|debug|warn|error)?\(.*(prompt|response|answer|output|user_input|user_query)', code_context, re.IGNORECASE):
+            if not re.search(r'(mask|redact|sanitize|anonymize|hash|filter)', code_context, re.IGNORECASE):
+                line_num = 1
+                confidence = 70
+                if not ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    findings.append({
+                        "id": f"{self.AGENT_ID}-{len(findings)}",
+                        "title": "Unmasked LLM Prompt/Response Logging",
+                        "category": "LLM02: Sensitive Information Disclosure",
+                        "severity": self._confidence_to_severity(confidence, "Medium"),
+                        "cvss_score": self._confidence_to_cvss(confidence, "Medium"),
+                        "file_path": file_path,
+                        "line_number": line_num,
+                        "code_evidence": "Logging of raw prompt or response variables detected without redaction",
+                        "description": "Raw LLM prompts or responses are logged without redaction or masking. This risks exposing user PII, proprietary data, or system prompts in application logs.",
+                        "remediation": "Implement PII scrubbing and data redaction filters before writing LLM interactions to system logs.",
+                        "cwe_id": "CWE-532",
+                        "owasp_llm_id": "LLM02:2025",
+                        "confidence_score": confidence,
+                        "agent_source": self.DISPLAY_NAME,
+                        "validation_required": confidence < 70
+                    })
+        return findings
+
+    def _calculate_secret_confidence(self, code_context: str, match: re.Match) -> int:
+        confidence = 75
+        matched_str = match.group(0).lower()
+        if any(ind in matched_str for ind in ['example', 'test', 'demo', 'sample', 'xxx', 'your_api_key', '000000']):
+            confidence -= 40
+        if 'os.getenv' in code_context or 'os.environ' in code_context:
+            confidence -= 20
+        return max(20, min(95, confidence))
+
+    def _confidence_to_severity(self, confidence: int, base: str = "High") -> str:
+        if base == "High":
+            return "High" if confidence >= 80 else ("Medium" if confidence >= 50 else "Low")
+        return "Medium" if confidence >= 70 else "Low"
+
+    def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
+        base_score = 7.5 if base_severity == "High" else 5.5
+        return round(min(10.0, base_score * (0.5 + (confidence / 200))), 1)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SPECIALIST AGENT 7: Supply Chain Security Analyst
+# ─────────────────────────────────────────────────────────────────────
+
+class SupplyChainSecurityAnalyst:
+    """
+    OWASP LLM03: Supply Chain
+    MITRE ATLAS: ML Pipeline Access
+    
+    Detects: Unsafe deserialization (pickle, joblib, yaml, torch.load without weights_only=True), unpinned dependencies
+    """
+    AGENT_ID = "SUP-07"
+    DISPLAY_NAME = "📦 Supply Chain Security Analyst"
+    
+    DESERIALIZATION_PATTERNS = [
+        (r'pickle\.(load|loads)\(', "Unsafe Pickle Deserialization", "Critical", "CWE-502"),
+        (r'joblib\.load\(', "Unsafe Joblib Deserialization", "High", "CWE-502"),
+        (r'yaml\.load\([^,]+,\s*Loader=yaml\.Loader\)', "Unsafe PyYAML Loader", "High", "CWE-502"),
+        (r'torch\.load\([^)]*weights_only\s*=\s*False', "PyTorch Load with weights_only=False", "Critical", "CWE-502"),
+    ]
+    
+    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+        findings = []
+        if ASTContextFilter.is_test_file(file_path):
+            return findings
+            
+        # Check explicit unsafe deserialization
+        for pattern, desc, sev, cwe in self.DESERIALIZATION_PATTERNS:
+            for match in re.finditer(pattern, code_context, re.IGNORECASE):
+                line_num = code_context[:match.start()].count('\n') + 1
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    continue
+                confidence = 85 if sev == "Critical" else 75
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": f"Supply Chain Risk: {desc}",
+                    "category": "LLM03: Supply Chain",
+                    "severity": self._confidence_to_severity(confidence, sev),
+                    "cvss_score": self._confidence_to_cvss(confidence, sev),
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": match.group(0)[:80],
+                    "description": f"Detected {desc}. Deserializing untrusted model files or checkpoints can lead to arbitrary code execution (RCE) on the inference server.",
+                    "remediation": "Use safe serialization formats like safetensors (`safetensors.torch.load_file`), or explicitly enforce `weights_only=True` when loading PyTorch models.",
+                    "cwe_id": cwe,
+                    "owasp_llm_id": "LLM03:2025",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": confidence < 75
+                })
+                
+        # Check torch.load without weights_only keyword at all
+        for match in re.finditer(r'torch\.load\([^)]+\)', code_context):
+            line_num = code_context[:match.start()].count('\n') + 1
+            if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                continue
+            if 'weights_only' not in match.group(0):
+                confidence = 80
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": "PyTorch torch.load Without weights_only=True",
+                    "category": "LLM03: Supply Chain",
+                    "severity": "High",
+                    "cvss_score": 8.1,
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": match.group(0)[:80],
+                    "description": "PyTorch model loaded using `torch.load()` without specifying `weights_only=True`. By default in older PyTorch versions, this uses Python pickle, allowing remote code execution if the checkpoint is untrusted.",
+                    "remediation": "Update the call to `torch.load(..., weights_only=True)` or migrate model checkpoints to HuggingFace `safetensors` format.",
+                    "cwe_id": "CWE-502",
+                    "owasp_llm_id": "LLM03:2025",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": False
+                })
+        return findings
+
+    def _confidence_to_severity(self, confidence: int, base: str = "High") -> str:
+        if base == "Critical":
+            return "Critical" if confidence >= 80 else "High"
+        return "High" if confidence >= 75 else "Medium"
+
+    def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
+        base_score = 9.0 if base_severity == "Critical" else 7.5
+        return round(min(10.0, base_score * (0.5 + (confidence / 200))), 1)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SPECIALIST AGENT 8: Output Handling Security
+# ─────────────────────────────────────────────────────────────────────
+
+class OutputHandlingSecurity:
+    """
+    OWASP LLM05: Improper Output Handling
+    
+    Detects: LLM outputs passed to eval, exec, os.system, subprocess, or HTML rendering without sanitization
+    """
+    AGENT_ID = "OUT-08"
+    DISPLAY_NAME = "📤 Output Handling Security"
+    
+    DANGEROUS_SINKS = [
+        (r'eval\s*\(\s*(response|output|result|llm_res|res|answer|text|content|code)', "LLM Output Passed to eval()", "Critical", "CWE-94"),
+        (r'exec\s*\(\s*(response|output|result|llm_res|res|answer|text|content|code)', "LLM Output Passed to exec()", "Critical", "CWE-94"),
+        (r'os\.system\s*\(\s*f?["\'][^"\']*(response|output|result|llm_res|res|text|content|cmd)', "LLM Output Passed to os.system()", "Critical", "CWE-78"),
+        (r'subprocess\.(Popen|run|call|check_output)\s*\(\s*[f]?["\']?[^"\']*(response|output|result|llm_res|res|text|content|cmd).*shell\s*=\s*True', "LLM Output in Subprocess with shell=True", "Critical", "CWE-78"),
+        (r'render_template_string\s*\(\s*(response|output|result|llm_res|res|text|content)', "LLM Output in Server-Side Template Rendering", "High", "CWE-1336"),
+    ]
+    
+    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+        findings = []
+        if ASTContextFilter.is_test_file(file_path):
+            return findings
+            
+        for pattern, desc, sev, cwe in self.DANGEROUS_SINKS:
+            for match in re.finditer(pattern, code_context, re.IGNORECASE):
+                line_num = code_context[:match.start()].count('\n') + 1
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    continue
+                confidence = 85
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": f"Improper Output Handling: {desc}",
+                    "category": "LLM05: Improper Output Handling",
+                    "severity": sev,
+                    "cvss_score": 9.3 if sev == "Critical" else 7.8,
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": match.group(0)[:80],
+                    "description": f"Detected {desc}. Unsanitized content generated by an LLM is being passed directly into an execution sink, enabling remote code execution via indirect prompt injection.",
+                    "remediation": "Never pass raw LLM responses to `eval()`, `exec()`, or system shells. Implement strict output parsing, schema enforcement (e.g., Pydantic), and sandboxed execution environments.",
+                    "cwe_id": cwe,
+                    "owasp_llm_id": "LLM05:2025",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": False
+                })
+        return findings
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SPECIALIST AGENT 9: Infrastructure & Container Security
+# ─────────────────────────────────────────────────────────────────────
+
+class InfrastructureContainerSecurity:
+    """
+    MITRE ATLAS: ML Service Interaction / Privilege Escalation
+    
+    Detects: Docker socket mounts, privileged containers, exposed unauthenticated AI serving endpoints (vLLM/KServe/Ollama)
+    """
+    AGENT_ID = "INF-09"
+    DISPLAY_NAME = "🏗️ Infrastructure & Container Security"
+    
+    INFRA_PATTERNS = [
+        (r'/var/run/docker\.sock', "Docker Socket Mounted in Container", "Critical", "CWE-250", "Mounting the Docker socket inside an inference or agent container allows trivial container escape and full host root takeover."),
+        (r'privileged\s*:\s*(true|True)', "Privileged Container Mode Enabled", "High", "CWE-250", "Running AI/ML containers in privileged mode disables Linux security controls and isolation, increasing container escape risk."),
+        (r'hostNetwork\s*:\s*(true|True)', "Kubernetes hostNetwork Enabled", "Medium", "CWE-250", "Enabling hostNetwork exposes internal serving ports directly to the node network interface without network policy isolation."),
+        (r'0\.0\.0\.0:(8000|11434|8080|5000)', "Exposed AI Serving Port Binding to All Interfaces", "Medium", "CWE-284", "Binding inference services (e.g., Ollama, vLLM, FastAPI) to `0.0.0.0` without strict API token authentication exposes them to network unauthorized access."),
+    ]
+    
+    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+        findings = []
+        if ASTContextFilter.is_test_file(file_path):
+            return findings
+            
+        for pattern, title, sev, cwe, desc in self.INFRA_PATTERNS:
+            for match in re.finditer(pattern, code_context):
+                line_num = code_context[:match.start()].count('\n') + 1
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    continue
+                confidence = 80 if sev in ["Critical", "High"] else 65
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": f"Infrastructure Security: {title}",
+                    "category": "INF-09: Infrastructure & Container Security",
+                    "severity": sev,
+                    "cvss_score": 8.8 if sev == "Critical" else (7.2 if sev == "High" else 5.4),
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": match.group(0)[:80],
+                    "description": desc,
+                    "remediation": "Remove Docker socket mounts, avoid `--privileged` flag, run containers as non-root users, and configure API authentication middleware for all model serving endpoints.",
+                    "cwe_id": cwe,
+                    "mitre_atlas_id": "ATLAS: ML Service Interaction",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": confidence < 70
+                })
+        return findings
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SPECIALIST AGENT 10: Red Team Adversarial Agent
+# ─────────────────────────────────────────────────────────────────────
+
+class RedTeamAdversarialAgent:
+    """
+    MITRE ATLAS: Exfiltration / Discovery / Model Access
+    
+    Detects: Unauthenticated model weight export endpoints, embedding inversion exposure, unrestricted model query endpoints
+    """
+    AGENT_ID = "RED-10"
+    DISPLAY_NAME = "🚩 Red Team Adversarial Agent"
+    
+    RED_PATTERNS = [
+        (r'(save_pretrained|torch\.save|export_model)\s*\([^\)]*request\.', "Model Weight Export Exposed via Request Endpoint", "High", "CWE-284", "Model export or serialization methods are tied directly to request handlers without explicit authorization checks, risking model intellectual property exfiltration."),
+        (r'(embeddings|encode)\s*\([^\)]*user_input[^\)]*\)(?!\s*#.*auth)', "Unrestricted Embedding API Endpoint Exposed", "Medium", "CWE-200", "Publicly accessible embedding endpoints without query rate limiting allow adversarial embedding inversion attacks to reconstruct proprietary training data or RAG documents."),
+        (r'return\s+.*(probabilities|logits|softmax)\s*(#|$)', "Raw Logits / Probabilities Returned to Client", "Low", "CWE-200", "Returning unbounded raw token logits or softmax probabilities directly to client responses facilitates membership inference and model distillation attacks."),
+    ]
+    
+    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+        findings = []
+        if ASTContextFilter.is_test_file(file_path):
+            return findings
+            
+        for pattern, title, sev, cwe, desc in self.RED_PATTERNS:
+            for match in re.finditer(pattern, code_context, re.IGNORECASE):
+                line_num = code_context[:match.start()].count('\n') + 1
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    continue
+                confidence = 70
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": f"Adversarial Attack Surface: {title}",
+                    "category": "MITRE ATLAS: Exfiltration / Discovery",
+                    "severity": sev,
+                    "cvss_score": 7.4 if sev == "High" else (5.3 if sev == "Medium" else 3.5),
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": match.group(0)[:80],
+                    "description": desc,
+                    "remediation": "Restrict access to model export/checkpoint endpoints, apply rate limiting and noise injection to embedding APIs, and return only generated tokens (not raw logits) to untrusted clients.",
+                    "cwe_id": cwe,
+                    "mitre_atlas_id": "ATLAS: Exfiltration",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": confidence < 75
+                })
+        return findings
+
+
+# ─────────────────────────────────────────────────────────────────────
 # AGENTS REGISTRY
 # ─────────────────────────────────────────────────────────────────────
 
@@ -846,6 +1223,11 @@ ALL_SPECIALIST_AGENTS = [
     MCPToolSecurityAnalyst,
     AgentOrchestrationSecurity,
     ModelDataPoisoningDetector,
+    SensitiveDataLeakageScanner,
+    SupplyChainSecurityAnalyst,
+    OutputHandlingSecurity,
+    InfrastructureContainerSecurity,
+    RedTeamAdversarialAgent,
 ]
 
 
@@ -853,7 +1235,7 @@ def run_all_agents_on_code(code: str, file_path: str = "") -> List[dict]:
     """Run all specialist agents on code and aggregate findings"""
     all_findings = []
     
-    console.print(f"\n  [bold]Deploying 5 Specialist Agents...[/bold]")
+    console.print(f"\n  [bold]Deploying 10 Specialist Agents...[/bold]")
     
     for AgentClass in ALL_SPECIALIST_AGENTS:
         agent = AgentClass()
