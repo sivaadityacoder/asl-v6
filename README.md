@@ -1,7 +1,13 @@
 # ASL V6 — Open-Source AI Red-Teaming & Exploit Verification Engine
 
+> 🔴 **Currently accepting 3 advisory clients for Q3 2026.** [Email me](mailto:adityasecuritylabs@gmail.com) or [DM on LinkedIn](https://linkedin.com/in/sivaaditya).
+
 **Author:** Siva Aditya Panuganti (Security Researcher)  
-**Track Record:** 6+ CVEs and GHSAs in production AI systems (AutoGPT, FlowiseAI, LLaMmlein, LangGraph MsgPack RCE) via responsible disclosure to BSI Germany, CERT-EE, and GitHub Security.
+**Track Record:** 6+ CVEs and GHSAs in production AI systems via responsible disclosure to BSI Germany, CERT-EE, and GitHub Security:
+- [CVE-2026-22038](https://nvd.nist.gov/vuln/detail/CVE-2026-22038) — AutoGPT secrets leak
+- [GHSA-x58f-9m57-qc4m](https://github.com/advisories/GHSA-x58f-9m57-qc4m) — FlowiseAI sandbox escape
+- [CVE-2025-68621](https://nvd.nist.gov/vuln/detail/CVE-2025-68621) — Trilium Notes timing side-channel
+- [GHSA-p97p-7x96-7wj5](https://github.com/advisories/GHSA-p97p-7x96-7wj5) — LLaMmlein deserialization RCE
 
 ---
 
