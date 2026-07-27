@@ -35,16 +35,16 @@ ASL V6 is free and open-source under the MIT License.
 
 Tested on real filesystem repositories:
 
-| Repository | Files Scanned | Raw Alerts | Validated True Positives | False Positive Reduction | Runtime Verification |
+| Repository | Files Scanned | Raw Alerts | Validated True Positives | False Positive Reduction | Docker Sandbox |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **LangGraph** | 513 | 606 | **13** | **97.9%** | `VERIFIED IN RUNTIME` |
-| **Haystack (deepset)** | 1,866 | 1,365 | **128** | **90.6%** | `VERIFIED IN RUNTIME` |
-| **ZenML** | 2,552 | 1,289 | **68** | **94.7%** | `VERIFIED IN RUNTIME` |
-| **Rasa** | — | 703 | **12** | **98.3%** | `VERIFIED IN RUNTIME` |
-| **Jina AI** | 823 | 598 | **40** | **93.3%** | `VERIFIED IN RUNTIME` |
-| **Weaviate** | 501 | 682 | **9** | **98.7%** | `VERIFIED IN RUNTIME` |
-| **Argilla** | 1,411 | 302 | **14** | **95.4%** | `VERIFIED IN RUNTIME` |
-| **ASL V6 Engine** | 7 | 48 | **0** | **100.0%** | `VERIFIED IN RUNTIME` |
+| **LangGraph** | 513 | 606 | **13** | **97.9%** | `ACTIVE` |
+| **Haystack (deepset)** | 1,866 | 1,365 | **128** | **90.6%** | `ACTIVE` |
+| **ZenML** | 2,552 | 1,289 | **68** | **94.7%** | `ACTIVE` |
+| **Rasa** | — | 703 | **12** | **98.3%** | `ACTIVE` |
+| **Jina AI** | 823 | 598 | **40** | **93.3%** | `ACTIVE` |
+| **Weaviate** | 501 | 682 | **9** | **98.7%** | `ACTIVE` |
+| **Argilla** | 1,411 | 302 | **14** | **95.4%** | `ACTIVE` |
+| **ASL V6 Engine** | 7 | 48 | **0** | **100.0%** | `ACTIVE` |
 
 ---
 
