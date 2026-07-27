@@ -37,7 +37,12 @@ Tested on real filesystem repositories:
 
 | Repository | Files Scanned | Raw Alerts | Validated True Positives | False Positive Reduction | Docker Sandbox |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **LangGraph** | 513 | 606 | **13** | **97.9%** | `ACTIVE` |
+| **LangChain** | — | 837 | **28** | **96.7%** | `ACTIVE` |
+| **LlamaIndex** | — | 885 | **304** | **65.6%** | `ACTIVE` |
+| **AutoGPT** | — | 756 | **146** | **80.7%** | `ACTIVE` |
+| **CrewAI** | — | 2019 | **125** | **93.8%** | `ACTIVE` |
+| **Composio** | — | 538 | **40** | **92.6%** | `ACTIVE` |
+| **Agno** | — | 728 | **93** | **87.2%** | `ACTIVE` |
 | **Haystack (deepset)** | 1,866 | 1,365 | **128** | **90.6%** | `ACTIVE` |
 | **ZenML** | 2,552 | 1,289 | **68** | **94.7%** | `ACTIVE` |
 | **Rasa** | — | 703 | **12** | **98.3%** | `ACTIVE` |
