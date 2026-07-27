@@ -80,16 +80,14 @@ You can use the included GitHub Actions workflow (`asl_v6_ci_cd_action.yml`) to 
 
 ---
 
-## Pro Managed Scan — Monthly Subscription
+## Managed Assessment
 
-If you want ASL V6 to run on your private or enterprise repository without setting up local infrastructure, we offer a managed scan service:
+Don't want to run it yourself? I offer a one-time assessment:
 
-| Plan | Price | What You Get |
-| :--- | :--- | :--- |
-| **Pro** | $99 / month | Monthly ASL V6 scan of your repo + clean markdown security report delivered by email |
-| **Enterprise** | $299 / month | Monthly scan report + 1 remediation pull request written into your repo + 30-minute review call |
-
-To subscribe, email **adityasecuritylabs@gmail.com** with the subject `ASL V6 Pro Subscription` and your GitHub repository URL.
+- **Codebase Scan + Report:** $1,500 fixed price
+- Includes: Full ASL V6 scan, verified findings report, remediation guidance
+- Delivered within 5 business days
+- Email: adityasecuritylabs@gmail.com
 
 ---
 
