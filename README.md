@@ -36,21 +36,12 @@ ASL V6 is free and open-source under the MIT License.
 ASL V6 was tested on popular open-source AI frameworks to measure its detection coverage. 
 Results show pattern-match counts before and after AST contextual filtering:
 
-| Repository | Files | Raw Patterns | Filtered Signals | Noise Reduction | Sandbox Status |
+| Repository | Files | Raw Patterns | Filtered Signals | Noise Reduction | Runtime Probe |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **LangChain** | — | 837 | **28** | **96.7%** | `Tested` |
-| **LlamaIndex** | — | 885 | **304** | **65.6%** | `Tested` |
-| **AutoGPT** | — | 756 | **146** | **80.7%** | `Tested` |
-| **CrewAI** | — | 2019 | **125** | **93.8%** | `Tested` |
-| **Composio** | — | 538 | **40** | **92.6%** | `Tested` |
-| **Agno** | — | 728 | **93** | **87.2%** | `Tested` |
-| **Haystack (deepset)** | 1,866 | 1,365 | **128** | **90.6%** | `Tested` |
-| **ZenML** | 2,552 | 1,289 | **68** | **94.7%** | `Tested` |
-| **Rasa** | — | 703 | **12** | **98.3%** | `Tested` |
-| **Jina AI** | 823 | 598 | **40** | **93.3%** | `Tested` |
-| **Weaviate** | 501 | 682 | **9** | **98.7%** | `Tested` |
-| **Argilla** | 1,411 | 302 | **14** | **95.4%** | `Tested` |
-| **ASL V6 Engine** | 7 | 48 | **0** | **100.0%** | `Tested` |
+| **LangGraph** | 513 | 606 | **13** | **97.9%** | `Available` |
+| **Weaviate** | 501 | 682 | **9** | **98.7%** | `Available` |
+| **Rasa** | — | 703 | **12** | **98.3%** | `Available` |
+| **ASL V6 Engine** | 7 | 48 | **0** | **100.0%** | `Available` |
 
 **Note:** These are automated pattern-match counts, not confirmed vulnerabilities. 
 Manual review and responsible disclosure are required to verify exploitability. 
