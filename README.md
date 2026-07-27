@@ -38,6 +38,12 @@ Tested on real filesystem repositories:
 | Repository | Files Scanned | Raw Alerts | Validated True Positives | False Positive Reduction | Runtime Verification |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | **LangGraph** | 513 | 606 | **13** | **97.9%** | `VERIFIED IN RUNTIME` |
+| **Haystack (deepset)** | 1,866 | 1,365 | **128** | **90.6%** | `VERIFIED IN RUNTIME` |
+| **ZenML** | 2,552 | 1,289 | **68** | **94.7%** | `VERIFIED IN RUNTIME` |
+| **Rasa** | — | 703 | **12** | **98.3%** | `VERIFIED IN RUNTIME` |
+| **Jina AI** | 823 | 598 | **40** | **93.3%** | `VERIFIED IN RUNTIME` |
+| **Weaviate** | 501 | 682 | **9** | **98.7%** | `VERIFIED IN RUNTIME` |
+| **Argilla** | 1,411 | 302 | **14** | **95.4%** | `VERIFIED IN RUNTIME` |
 | **ASL V6 Engine** | 7 | 48 | **0** | **100.0%** | `VERIFIED IN RUNTIME` |
 
 ---
@@ -66,6 +72,19 @@ python3 v6_ai_benchmarks.py /path/to/repo1 /path/to/repo2
 ## CI/CD Pull Request Gate
 
 You can use the included GitHub Actions workflow (`asl_v6_ci_cd_action.yml`) to automatically check pull requests for security flaws during your CI/CD build process.
+
+---
+
+## Pro Managed Scan — Monthly Subscription
+
+If you want ASL V6 to run on your private or enterprise repository without setting up local infrastructure, we offer a managed scan service:
+
+| Plan | Price | What You Get |
+| :--- | :--- | :--- |
+| **Pro** | $99 / month | Monthly ASL V6 scan of your repo + clean markdown security report delivered by email |
+| **Enterprise** | $299 / month | Monthly scan report + 1 remediation pull request written into your repo + 30-minute review call |
+
+To subscribe, email **adityasecuritylabs@gmail.com** with the subject `ASL V6 Pro Subscription` and your GitHub repository URL.
 
 ---
 
