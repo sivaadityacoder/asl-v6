@@ -15,6 +15,7 @@ from v6_specialist_agents import (
     ASTContextFilter,
     MCPToolSecurityAnalyst,
     ModelDataPoisoningDetector,
+    OutputHandlingSecurity,
     PromptInjectionHunter,
     RAGSecurityAuditor,
     SensitiveDataLeakageScanner,
@@ -53,6 +54,7 @@ class V61CliTests(unittest.TestCase):
         expected = {
             "tests/app.py": True,
             "docs/app.py": True,
+            "docs_src/app.py": True,
             "config.yaml": False,
             "src/contest_utils.py": False,
             "src/latest_model.py": False,
@@ -87,12 +89,67 @@ class V61CliTests(unittest.TestCase):
         code = (
             "logging.info('wrote output file')\n"
             "logging.info('prompt=%s', prompt)\n"
+            "logger.debug('Received model response')\n"
+            "logger.debug(f'HTTP response: {response.status_code}')\n"
+            "logger.warning('%s ignoring unsupported setting', message)\n"
+            "logger.warning('%s ignoring unsupported server-managed conversation state', message)\n"
+            "logger.debug('Output type: %s', type(output))\n"
         )
 
         findings = SensitiveDataLeakageScanner().analyze(code, "app.py")
 
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["line_number"], 2)
+
+    def test_llm_logging_rule_detects_multiline_model_data(self):
+        code = (
+            "logger.debug(\n"
+            "    'LLM response: %s',\n"
+            "    json.dumps(message.model_dump()),\n"
+            ")\n"
+        )
+
+        findings = SensitiveDataLeakageScanner().analyze(code, "app.py")
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["line_number"], 1)
+
+    def test_llm_logging_rule_detects_protocol_payload(self):
+        findings = SensitiveDataLeakageScanner().analyze(
+            "logger.debug(f'Validated client message: {message}')\n",
+            "client.py",
+        )
+
+        self.assertEqual(len(findings), 1)
+
+    def test_internal_task_assignments_are_not_goal_injection(self):
+        code = (
+            "self._task = asyncio.create_task(self._run())\n"
+            "task = self.executor.submit(fn)\n"
+            "self.tasks[task] = metadata\n"
+        )
+
+        findings = AgentOrchestrationSecurity().analyze(code, "executor.py")
+
+        self.assertEqual(findings, [])
+
+    def test_capture_output_is_not_llm_subprocess_data(self):
+        safe = "subprocess.run([cmd, '--version'], capture_output=True, shell=True)\n"
+        unsafe = "subprocess.run(response, shell=True)\n"
+
+        self.assertEqual(OutputHandlingSecurity().analyze(safe, "cli.py"), [])
+        findings = OutputHandlingSecurity().analyze(unsafe, "agent.py")
+        self.assertEqual(len(findings), 1)
+        self.assertIn("Subprocess", findings[0]["title"])
+
+    def test_documented_public_client_key_is_not_validated_as_a_secret(self):
+        code = "SUPABASE_PUBLIC_API_KEY = 'abcdefghijklmnopqrstuvwxyz123456'\n"
+
+        raw = SensitiveDataLeakageScanner().analyze(code, "constants.py")
+        validated = VerificationGauntlet().verify(raw)["validated_findings"]
+
+        self.assertTrue(raw)
+        self.assertEqual(validated, [])
 
     def test_repository_level_rules_report_the_matched_line(self):
         cases = [
@@ -117,7 +174,7 @@ class V61CliTests(unittest.TestCase):
             (
                 AgentOrchestrationSecurity(),
                 "header = 1\nvalue = 2\ngoal = user_input\n",
-                "Agent Goals/Tasks Set Without Validation",
+                "Agent Goal/Instruction Set Without Validation",
                 3,
             ),
             (
@@ -152,7 +209,7 @@ class V61CliTests(unittest.TestCase):
             self.assertTrue(result.markdown_report.exists())
             self.assertTrue(result.json_report.exists())
             report = json.loads(result.json_report.read_text(encoding="utf-8"))
-            self.assertEqual(report["scan_metadata"]["engine_version"], "6.1.1")
+            self.assertEqual(report["scan_metadata"]["engine_version"], "6.1.2")
             self.assertGreaterEqual(report["gauntlet_summary"]["validated_findings_count"], 1)
 
     def test_scan_keeps_config_and_misleading_production_filenames(self):

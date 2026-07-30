@@ -39,12 +39,17 @@ Community execution is local and does not require a subscription key. Pro is a h
 
 ## Verified Execution Benchmark
 
-Tested on real filesystem repositories:
+### Real OSS validation
 
-| Repository | Files Scanned | Raw Alerts | Validated True Positives | False Positive Reduction | Runtime Verification |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| **LangGraph** | 513 | 606 | **13 high-confidence findings** | **97.9%** | Historical benchmark |
-| **ASL V6 Engine** | 7 | 48 | **0 high-confidence findings** | **100.0%** | Historical benchmark |
+V6.1.2 was exercised against pinned public GitHub commits using the packaged CLI. Findings are static review signals, not claims of confirmed vulnerabilities.
+
+| Target | Commit | Files | Validated signals | Scan errors | `--fail-on high` |
+| :--- | :--- | ---: | ---: | ---: | :---: |
+| [OpenAI Agents Python](https://github.com/openai/openai-agents-python) | [`992abf7`](https://github.com/openai/openai-agents-python/commit/992abf763d24881bab55663de6a93cf58f1c6118) | 876 | 5 Medium | 0 | Exit 0 |
+| [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | [`a4f4ccd`](https://github.com/modelcontextprotocol/python-sdk/commit/a4f4ccd091138771535e17191123f20b30fda68e) | 846 | 5 Medium | 0 | Exit 0 |
+| [LangGraph](https://github.com/langchain-ai/langgraph) | [`4134145`](https://github.com/langchain-ai/langgraph/commit/41341457342327166d72fc11952ab28fb61ec0bf) | 513 | 1 Critical | 0 | Exit 1 |
+
+The remaining signals were source-reviewed: serialized model-response logging, raw MCP protocol-message logging, and an explicit pickle fallback. Exact results can change as upstream repositories evolve.
 
 ---
 

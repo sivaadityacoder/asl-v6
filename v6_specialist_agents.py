@@ -48,15 +48,21 @@ class ASTContextFilter:
         "demos",
         "doc",
         "docs",
+        "docs_src",
+        "documentation",
         "example",
         "examples",
         "fixtures",
         "integration_tests",
+        "sample",
+        "samples",
         "spec",
         "specs",
         "test",
         "testing",
         "tests",
+        "tutorial",
+        "tutorials",
         "unit_tests",
     }
 
@@ -691,27 +697,37 @@ class AgentOrchestrationSecurity:
                     "validation_required": framework_confidence < 55
                 })
 
-        # Check for goal/task injection
-        goal_match = re.search(
-            r'goal\s*=|task\s*=|objective\s*=|instruction\s*=',
-            code_context,
+        # Check direct goal/instruction assignments whose value has evidence of untrusted input.
+        assignment_pattern = re.compile(
+            r"(?m)^[ \t]*(?:(?:const|let|var)\s+)?"
+            r"(?:[A-Za-z_]\w*\.)?(?:goal|objective|instruction)\s*=\s*([^\n;]+)",
             re.IGNORECASE,
         )
-        if goal_match:
-            if not re.search(r'validate|verify|sanitize|check|filter', code_context, re.IGNORECASE):
-                goal_confidence = self._calculate_goal_injection_confidence(code_context)
+        for goal_match in assignment_pattern.finditer(code_context):
+            assigned_value = goal_match.group(1)
+            if not re.search(
+                r"\b(?:request|req|input|user|user_input|user_query|args|params|query|payload|body)\b",
+                assigned_value,
+                re.IGNORECASE,
+            ):
+                continue
+            context_start = max(0, goal_match.start() - 300)
+            context_end = min(len(code_context), goal_match.end() + 300)
+            local_context = code_context[context_start:context_end]
+            if not re.search(r'validate|verify|sanitize|check|filter', local_context, re.IGNORECASE):
+                goal_confidence = self._calculate_goal_injection_confidence(local_context)
 
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
-                    "title": "Agent Goals/Tasks Set Without Validation",
+                    "title": "Agent Goal/Instruction Set Without Validation",
                     "category": "ASI02: Insecure Goal Formulation",
                     "severity": self._confidence_to_severity(goal_confidence, base="High"),
                     "cvss_score": self._confidence_to_cvss(goal_confidence, "High"),
                     "file_path": file_path,
                     "line_number": code_context[:goal_match.start()].count("\n") + 1,
-                    "code_evidence": "Goal/task assignment detected without validation",
-                    "description": "Agent goals or tasks can potentially be hijacked if user input is used without validation",
-                    "remediation": "Validate all goal/task inputs, implement goal allowlisting, monitor for goal drift",
+                    "code_evidence": goal_match.group(0).strip()[:100],
+                    "description": "Agent goals or instructions can potentially be hijacked if user input is used without validation",
+                    "remediation": "Validate all goal/instruction inputs, implement goal allowlisting, monitor for goal drift",
                     "cwe_id": "CWE-1427",
                     "owasp_llm_id": "ASI02:2026",
                     "confidence_score": goal_confidence,
@@ -997,39 +1013,138 @@ class SensitiveDataLeakageScanner:
                     "validation_required": confidence < 75
                 })
 
-        # Check for unmasked PII logging in LLM responses/prompts.
-        logging_pattern = re.compile(
-            r'(?:logger|logging)\.(?:info|debug|warning|warn|error)\s*\([^\n]*'
-            r'\b(?:prompt|response|answer|llm_output|user_input|user_query)\b',
+        # Check for logging of actual LLM data expressions, not words inside log messages.
+        source_lines = code_context.splitlines()
+        try:
+            tree = ast.parse(code_context)
+        except (SyntaxError, ValueError):
+            tree = None
+        if tree:
+            for node in ast.walk(tree):
+                if not self._is_logging_call(node):
+                    continue
+                values = [*node.args, *(keyword.value for keyword in node.keywords)]
+                format_text = self._literal_log_text(node.args[0]) if node.args else ""
+                if not any(
+                    self._contains_sensitive_log_value(value, format_text)
+                    for value in values
+                ):
+                    continue
+                line_num = node.lineno
+                line_text = source_lines[line_num - 1] if line_num <= len(source_lines) else ""
+                source_segment = ast.get_source_segment(code_context, node) or line_text
+                if re.search(
+                    r'(mask|redact|sanitize|anonymize|hash|filter)',
+                    source_segment,
+                    re.IGNORECASE,
+                ):
+                    continue
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                    continue
+                confidence = 70
+                findings.append({
+                    "id": f"{self.AGENT_ID}-{len(findings)}",
+                    "title": "Unmasked LLM Prompt/Response Logging",
+                    "category": "LLM02: Sensitive Information Disclosure",
+                    "severity": self._confidence_to_severity(confidence, "Medium"),
+                    "cvss_score": self._confidence_to_cvss(confidence, "Medium"),
+                    "file_path": file_path,
+                    "line_number": line_num,
+                    "code_evidence": " ".join(source_segment.split())[:100],
+                    "description": "Raw LLM prompts or responses are logged without redaction or masking. This risks exposing user PII, proprietary data, or system prompts in application logs.",
+                    "remediation": "Implement PII scrubbing and data redaction filters before writing LLM interactions to system logs.",
+                    "cwe_id": "CWE-532",
+                    "owasp_llm_id": "LLM02:2025",
+                    "confidence_score": confidence,
+                    "agent_source": self.DISPLAY_NAME,
+                    "validation_required": confidence < 70
+                })
+        return findings
+
+    @staticmethod
+    def _is_logging_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"info", "debug", "warning", "warn", "error", "exception", "critical"}
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in {"logger", "logging"}
+        )
+
+    @classmethod
+    def _literal_log_text(cls, node: ast.AST) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value.lower()
+        if isinstance(node, ast.JoinedStr):
+            return " ".join(
+                value.value.lower()
+                for value in node.values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            )
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return f"{cls._literal_log_text(node.left)} {cls._literal_log_text(node.right)}"
+        return ""
+
+    @classmethod
+    def _contains_sensitive_log_value(cls, node: ast.AST, format_text: str = "") -> bool:
+        strong_names = {
+            "llm_output",
+            "model_output",
+            "prompt",
+            "user_input",
+            "user_query",
+        }
+        contextual_names = {"answer", "content", "message", "output", "response"}
+        context_signals = re.search(
+            r"(?:\b(?:incoming|outgoing|received|sending|validated)\b.{0,40}"
+            r"\b(?:message|output|response)\b)"
+            r"|(?:\b(?:llm|model|sse)\b.{0,20}\b(?:message|output|resp(?:onse)?)\b)"
+            r"|(?:\b(?:message|output|resp(?:onse)?)\b.{0,20}\b(?:llm|model|sse)\b)",
+            format_text,
             re.IGNORECASE,
         )
-        source_lines = code_context.splitlines()
-        for match in logging_pattern.finditer(code_context):
-            line_num = code_context[:match.start()].count('\n') + 1
-            line_text = source_lines[line_num - 1]
-            if re.search(r'(mask|redact|sanitize|anonymize|hash|filter)', line_text, re.IGNORECASE):
-                continue
-            if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
-                continue
-            confidence = 70
-            findings.append({
-                "id": f"{self.AGENT_ID}-{len(findings)}",
-                "title": "Unmasked LLM Prompt/Response Logging",
-                "category": "LLM02: Sensitive Information Disclosure",
-                "severity": self._confidence_to_severity(confidence, "Medium"),
-                "cvss_score": self._confidence_to_cvss(confidence, "Medium"),
-                "file_path": file_path,
-                "line_number": line_num,
-                "code_evidence": line_text.strip()[:100],
-                "description": "Raw LLM prompts or responses are logged without redaction or masking. This risks exposing user PII, proprietary data, or system prompts in application logs.",
-                "remediation": "Implement PII scrubbing and data redaction filters before writing LLM interactions to system logs.",
-                "cwe_id": "CWE-532",
-                "owasp_llm_id": "LLM02:2025",
-                "confidence_score": confidence,
-                "agent_source": self.DISPLAY_NAME,
-                "validation_required": confidence < 70
-            })
-        return findings
+        safe_attributes = {
+            "prompt": {"id", "name", "type"},
+            "response": {"headers", "method", "ok", "reason", "request", "status", "status_code", "url"},
+        }
+        payload_attributes = {
+            "answer": {"body", "content", "data", "model_dump", "text"},
+            "content": {"body", "data", "model_dump", "text"},
+            "message": {"body", "content", "data", "model_dump", "text"},
+            "output": {"body", "content", "data", "model_dump", "text"},
+            "response": {"body", "content", "data", "model_dump", "output"},
+        }
+        if isinstance(node, ast.Name):
+            name = node.id.lower()
+            return name in strong_names or (name in contextual_names and bool(context_signals))
+        if isinstance(node, ast.Attribute):
+            parts = []
+            current = node
+            while isinstance(current, ast.Attribute):
+                parts.append(current.attr.lower())
+                current = current.value
+            if isinstance(current, ast.Name):
+                root = current.id.lower()
+                first_attribute = parts[-1] if parts else ""
+                if root in safe_attributes and first_attribute in safe_attributes[root]:
+                    return False
+                if root in strong_names:
+                    return True
+                if root in contextual_names:
+                    return first_attribute in payload_attributes.get(root, set())
+            return cls._contains_sensitive_log_value(node.value, format_text)
+        if isinstance(node, ast.Constant):
+            return False
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"callable", "hasattr", "isinstance", "type"}
+        ):
+            return False
+        return any(
+            cls._contains_sensitive_log_value(child, format_text)
+            for child in ast.iter_child_nodes(node)
+        )
 
     def _calculate_secret_confidence(self, code_context: str, match: re.Match) -> int:
         confidence = 75
@@ -1038,6 +1153,12 @@ class SensitiveDataLeakageScanner:
             confidence -= 40
         if 'os.getenv' in code_context or 'os.environ' in code_context:
             confidence -= 20
+        line_start = code_context.rfind("\n", 0, match.start()) + 1
+        line_end = code_context.find("\n", match.end())
+        matched_line = code_context[line_start:None if line_end == -1 else line_end].lower()
+        assignment_name = matched_line.split("=", 1)[0]
+        if any(marker in assignment_name for marker in ("anon", "public", "publishable")):
+            confidence -= 40
         return max(20, min(95, confidence))
 
     def _confidence_to_severity(self, confidence: int, base: str = "High") -> str:
@@ -1154,7 +1275,7 @@ class OutputHandlingSecurity:
         (r'eval\s*\(\s*(response|output|result|llm_res|res|answer|text|content|code)', "LLM Output Passed to eval()", "Critical", "CWE-94"),
         (r'exec\s*\(\s*(response|output|result|llm_res|res|answer|text|content|code)', "LLM Output Passed to exec()", "Critical", "CWE-94"),
         (r'os\.system\s*\(\s*f?["\'][^"\']*(response|output|result|llm_res|res|text|content|cmd)', "LLM Output Passed to os.system()", "Critical", "CWE-78"),
-        (r'subprocess\.(Popen|run|call|check_output)\s*\(\s*[f]?["\']?[^"\']*(response|output|result|llm_res|res|text|content|cmd).*shell\s*=\s*True', "LLM Output in Subprocess with shell=True", "Critical", "CWE-78"),
+        (r'subprocess\.(Popen|run|call|check_output)\s*\(\s*(?:\[\s*)?(?:response|output|result|llm_res|answer|content|model_output)\b[^\n]*shell\s*=\s*True', "LLM Output in Subprocess with shell=True", "Critical", "CWE-78"),
         (r'render_template_string\s*\(\s*(response|output|result|llm_res|res|text|content)', "LLM Output in Server-Side Template Rendering", "High", "CWE-1336"),
     ]
 

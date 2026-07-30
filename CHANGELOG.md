@@ -1,5 +1,26 @@
 # Changelog
 
+## 6.1.2 - 2026-07-30
+
+### Changed
+
+- LLM logging detection now analyzes Python logging-call expressions instead of matching sensitive words inside literal messages.
+- Goal-injection detection requires a direct goal/objective/instruction assignment with evidence of untrusted input.
+- Pull-request documentation paths now recognize common `docs_src`, documentation, tutorial, and sample directory names.
+
+### Fixed
+
+- Stop treating internal asyncio/executor task assignments as agent goal hijacking.
+- Stop treating `capture_output=True` as LLM-generated data passed to `subprocess`.
+- Stop reporting type-only, status-only, and static compatibility log messages as raw model-data leakage.
+- Lower public/anonymous/publishable client-key signals below validation confidence while preserving real secret-key detections.
+- Preserve detections for serialized model responses, raw MCP protocol messages, and unsafe deserialization.
+
+### Validation
+
+- Scanned pinned commits of OpenAI Agents Python, MCP Python SDK, and LangGraph: 2,235 source files, zero scanner errors.
+- Verified `--fail-on high` exits 0 for Medium-only reports and exits 1 for a Critical unsafe-deserialization finding.
+
 ## 6.1.1 - 2026-07-30
 
 ### Changed
