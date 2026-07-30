@@ -39,8 +39,12 @@ class V6DynamicSandboxEngine:
          (DVAA, DVLA, DV_MCP, etc.) and executes OWASP LLM01/02 dynamic attack payloads.
     """
     def __init__(self, timeout_seconds: int = 10, default_image: str = "python:3.11-slim"):
+        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a positive integer")
+        if not isinstance(default_image, str) or not default_image.strip():
+            raise ValueError("default_image must be a non-empty string")
         self.timeout = timeout_seconds
-        self.default_image = default_image
+        self.default_image = default_image.strip()
         self.docker_available = self._check_docker()
 
     def _check_docker(self) -> bool:
@@ -76,15 +80,15 @@ class V6DynamicSandboxEngine:
             "python3", "-c", code_snippet,
         ]
 
-        start_t = time.time()
+        start_t = time.monotonic()
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
-            duration = round(time.time() - start_t, 2)
+            duration = round(time.monotonic() - start_t, 2)
             stdout = res.stdout.strip()
             stderr = res.stderr.strip()
 
-            proof_markers = ("ASL_V6_SANDBOX_EXPLOIT_SUCCESS", "uid=")
-            is_exploitable = res.returncode == 0 and any(marker in stdout for marker in proof_markers)
+            proof_marker = "ASL_V6_SANDBOX_EXPLOIT_SUCCESS"
+            is_exploitable = res.returncode == 0 and proof_marker in stdout
 
             return {
                 "status": "COMPLETED",
@@ -199,7 +203,10 @@ if __name__ == "__main__":
     console.print(f"Docker Daemon Available: [bold cyan]{engine.docker_available}[/bold cyan]")
 
     console.print("\n[bold yellow]1. Testing Ephemeral Docker Sandbox Execution:[/bold yellow]")
-    sb_res = engine.test_snippet_in_sandbox("eval('os.system(\"id\")')", "Unsafe Eval Execution")
+    sb_res = engine.test_snippet_in_sandbox(
+        "import os; print('ASL_V6_SANDBOX_EXPLOIT_SUCCESS'); os.system('id')",
+        "Unsafe Eval Execution",
+    )
     console.print(sb_res)
 
     console.print("\n[bold yellow]2. Probing Live AI Containers on Host:[/bold yellow]")

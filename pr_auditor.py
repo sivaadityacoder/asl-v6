@@ -16,6 +16,8 @@ from v6_specialist_agents import ALL_SPECIALIST_AGENTS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 GITHUB_API_TIMEOUT = 20
+MAX_SOURCE_BYTES = 2_000_000
+SUPPORTED_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".yaml", ".yml", ".json"}
 
 def get_pr_files(github_token, repo, pr_number):
     """Fetch changed files for a PR."""
@@ -83,6 +85,40 @@ def added_lines_from_patch(patch):
             new_line += 1
     return added_lines
 
+
+def resolve_changed_file(workspace: Path, filename: str) -> Path | None:
+    """Resolve a changed source file without following paths outside the workspace."""
+    if not isinstance(filename, str) or not filename:
+        return None
+    workspace = workspace.resolve()
+    candidate = workspace / filename
+    try:
+        if candidate.is_symlink():
+            return None
+        resolved = candidate.resolve(strict=True)
+        if (
+            not resolved.is_relative_to(workspace)
+            or not resolved.is_file()
+            or resolved.stat().st_size > MAX_SOURCE_BYTES
+        ):
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return resolved
+
+
+def findings_on_added_lines(findings, added_lines_by_file):
+    """Keep only findings introduced by the pull request diff."""
+    result = []
+    for finding in findings:
+        try:
+            line = int(finding.get("line_number", 0))
+        except (TypeError, ValueError):
+            continue
+        if line in added_lines_by_file.get(finding.get("file_path"), set()):
+            result.append(finding)
+    return result
+
 def generate_sarif(findings, repo_path, output_file="asl-v6-results.sarif"):
     """Generate SARIF JSON from ASL V6 findings."""
     rules = []
@@ -146,11 +182,21 @@ def scan_file_with_agents(file_path: Path, relative_path: str):
     findings = []
     try:
         content = file_path.read_text(encoding="utf-8", errors="ignore")
-        for AgentClass in ALL_SPECIALIST_AGENTS:
+    except (OSError, UnicodeError) as error:
+        logging.error(f"Error reading {relative_path}: {error}")
+        return findings
+
+    for AgentClass in ALL_SPECIALIST_AGENTS:
+        try:
             agent = AgentClass()
             findings.extend(agent.analyze(content, relative_path))
-    except Exception as e:
-        logging.error(f"Error scanning {relative_path}: {e}")
+        except Exception as error:
+            logging.error(
+                "Scanner %s failed on %s: %s",
+                getattr(AgentClass, "__name__", str(AgentClass)),
+                relative_path,
+                error,
+            )
     return findings
 
 def main():
@@ -175,7 +221,10 @@ def main():
     repo_name = event.get("repository", {}).get("full_name")
     pr_number = pr.get("number")
     commit_id = pr.get("head", {}).get("sha")
-    workspace = Path(os.getenv("GITHUB_WORKSPACE", "."))
+    workspace = Path(os.getenv("GITHUB_WORKSPACE", ".")).resolve()
+    if not workspace.is_dir():
+        logging.error("GITHUB_WORKSPACE is not a directory: %s", workspace)
+        sys.exit(1)
 
     logging.info(f"Fetching changed files for {repo_name} PR #{pr_number}")
     changed_files = get_pr_files(github_token, repo_name, pr_number)
@@ -189,13 +238,18 @@ def main():
         filename = file_info.get("filename")
         if not filename:
             continue
-        file_path = workspace / filename
-        if not file_path.exists():
+        file_path = resolve_changed_file(workspace, filename)
+        if file_path is None:
+            logging.warning("Skipping unsafe, missing, or oversized changed file: %s", filename)
             continue
 
-        if file_path.suffix in {".py", ".js", ".ts", ".yaml", ".yml", ".json"}:
+        if file_path.suffix.lower() in SUPPORTED_SUFFIXES:
             logging.info(f"Scanning changed file: {filename}")
-            commentable_lines[filename] = added_lines_from_patch(file_info.get("patch"))
+            added_lines = added_lines_from_patch(file_info.get("patch"))
+            if not added_lines and file_info.get("status") == "added":
+                line_count = len(file_path.read_text(encoding="utf-8", errors="ignore").splitlines())
+                added_lines = set(range(1, line_count + 1))
+            commentable_lines[filename] = added_lines
             all_raw_findings.extend(scan_file_with_agents(file_path, filename))
 
     logging.info(f"Detected {len(all_raw_findings)} raw heuristic signals.")
@@ -203,20 +257,26 @@ def main():
     gauntlet = VerificationGauntlet(confidence_threshold=65, base_path=workspace)
     gauntlet_results = gauntlet.verify(all_raw_findings)
     validated_findings = gauntlet_results.get("validated_findings", [])
+    introduced_findings = findings_on_added_lines(validated_findings, commentable_lines)
 
-    logging.info(f"Validated findings: {len(validated_findings)} (False positive reduction: {gauntlet_results.get('fp_reduction_percentage')}%)")
+    logging.info(
+        "Validated findings on added lines: %s (%s across complete changed files; false positive reduction: %s%%)",
+        len(introduced_findings),
+        len(validated_findings),
+        gauntlet_results.get("fp_reduction_percentage"),
+    )
 
     # Optional: Reason and remediate the top findings to get a patch
-    reasoning_engine = LLMSecurityReasoningEngine()
-    for finding in validated_findings:
+    reasoning_engine = LLMSecurityReasoningEngine(provider="offline")
+    for finding in introduced_findings:
         reasoning_engine.reason_and_remediate(finding, workspace)
 
-    generate_sarif(validated_findings, workspace)
+    generate_sarif(introduced_findings, workspace)
 
     comments = []
     high_severity_found = False
 
-    for finding in validated_findings:
+    for finding in introduced_findings:
         sev = finding.get("severity", "Medium")
         if sev in ("High", "Critical"):
             high_severity_found = True

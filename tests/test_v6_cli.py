@@ -11,9 +11,12 @@ from v6_ai_infra_security import InternetDiscoveryEngine, TargetProfiler, Verifi
 from v6_cli import _threshold_reached, iter_source_files, main, scan_repository
 from v6_dynamic_sandbox import V6DynamicSandboxEngine
 from v6_specialist_agents import (
+    AgentOrchestrationSecurity,
     ASTContextFilter,
     MCPToolSecurityAnalyst,
+    ModelDataPoisoningDetector,
     PromptInjectionHunter,
+    RAGSecurityAuditor,
     SensitiveDataLeakageScanner,
 )
 from v6_subscription_engine import SubscriptionManager, SubscriptionTier
@@ -91,6 +94,45 @@ class V61CliTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["line_number"], 2)
 
+    def test_repository_level_rules_report_the_matched_line(self):
+        cases = [
+            (
+                PromptInjectionHunter(),
+                "header = 1\nprompt = f'Answer {user_input}'\n",
+                "Unsanitized User Input in Prompt",
+                2,
+            ),
+            (
+                RAGSecurityAuditor(),
+                "header = 1\ndb = Chroma()\n",
+                "Missing Namespace Isolation in ChromaDB",
+                2,
+            ),
+            (
+                RAGSecurityAuditor(),
+                "header = 1\nvalue = 2\ndocs = load_documents(source)\n",
+                "Document Ingestion Without Validation",
+                3,
+            ),
+            (
+                AgentOrchestrationSecurity(),
+                "header = 1\nvalue = 2\ngoal = user_input\n",
+                "Agent Goals/Tasks Set Without Validation",
+                3,
+            ),
+            (
+                ModelDataPoisoningDetector(),
+                "header = 1\nvalue = 2\ndata = load_dataset(name)\n",
+                "Dataset Loaded Without Validation",
+                3,
+            ),
+        ]
+        for agent, code, title, expected_line in cases:
+            with self.subTest(title=title):
+                findings = agent.analyze(code, "app.py")
+                finding = next(item for item in findings if item["title"] == title)
+                self.assertEqual(finding["line_number"], expected_line)
+
     def test_scan_repository_writes_real_reports(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -110,7 +152,7 @@ class V61CliTests(unittest.TestCase):
             self.assertTrue(result.markdown_report.exists())
             self.assertTrue(result.json_report.exists())
             report = json.loads(result.json_report.read_text(encoding="utf-8"))
-            self.assertEqual(report["scan_metadata"]["engine_version"], "6.1.0")
+            self.assertEqual(report["scan_metadata"]["engine_version"], "6.1.1")
             self.assertGreaterEqual(report["gauntlet_summary"]["validated_findings_count"], 1)
 
     def test_scan_keeps_config_and_misleading_production_filenames(self):
@@ -193,6 +235,55 @@ class V61CliTests(unittest.TestCase):
         self.assertIn("no-new-privileges", command)
         self.assertTrue(result["verified_exploitable"])
         self.assertEqual(result["vulnerability_type"], "Unit test")
+
+    def test_dynamic_sandbox_requires_explicit_proof_marker(self):
+        docker_info = subprocess.CompletedProcess(["docker", "info"], 0)
+        execution = subprocess.CompletedProcess(
+            ["docker", "run"],
+            0,
+            stdout="uid=65534(nobody)",
+            stderr="",
+        )
+        with patch("v6_dynamic_sandbox.subprocess.run", side_effect=[docker_info, execution]):
+            result = V6DynamicSandboxEngine().test_snippet_in_sandbox("print('uid=')")
+
+        self.assertFalse(result["verified_exploitable"])
+
+    def test_dynamic_sandbox_rejects_invalid_configuration(self):
+        for timeout in (0, -1, True, 1.5):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                V6DynamicSandboxEngine(timeout_seconds=timeout)
+        with self.assertRaises(ValueError):
+            V6DynamicSandboxEngine(default_image="  ")
+
+    def test_remediation_context_is_confined_to_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "target"
+            root.mkdir()
+            outside = Path(directory) / "outside.py"
+            outside.write_text("SECRET_OUTSIDE_CONTEXT\n", encoding="utf-8")
+            finding = {
+                "title": "Example",
+                "category": "Example",
+                "code_evidence": "SAFE_EVIDENCE",
+                "file_path": "../outside.py",
+                "line_number": 1,
+            }
+            engine = v6_ai_infra_security.LLMSecurityReasoningEngine(provider="offline")
+            with patch.object(
+                engine,
+                "_synthesize_reasoning",
+                return_value=("thinking", "patch", "scenario"),
+            ) as synthesize:
+                engine.reason_and_remediate(finding, root)
+
+        self.assertEqual(synthesize.call_args.args[2], "SAFE_EVIDENCE")
+
+    def test_offline_remediation_never_selects_nvidia(self):
+        with patch.dict("os.environ", {"NVIDIA_API_KEY": "nvapi-example"}, clear=True):
+            engine = v6_ai_infra_security.LLMSecurityReasoningEngine(provider="offline")
+
+        self.assertFalse(engine._uses_nvidia())
 
     def test_cli_reports_output_directory_errors_without_a_traceback(self):
         with tempfile.TemporaryDirectory() as directory:

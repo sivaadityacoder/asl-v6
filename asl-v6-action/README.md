@@ -6,9 +6,9 @@ Instead of requiring developers to remember to run the ASL V6 auditor locally be
 - Scans **only the changed files** in the Pull Request to ensure fast CI execution.
 - Verifies raw findings using the **Verification Gauntlet** to reduce static false positives.
 - Posts **verified findings as inline PR comments** right on the vulnerable lines of code.
-- Synthesizes and suggests a custom secure code patch using Layer 10 AI Reasoning.
+- Synthesizes and suggests a custom secure code patch using deterministic offline reasoning.
 - Generates a **SARIF report** that can be uploaded to GitHub Advanced Security.
-- Optionally fails the CI build if verified **High** or **Critical** severity issues are detected.
+- Optionally fails the CI build if verified **High** or **Critical** severity issues are introduced on added lines.
 
 ## One-Line Setup
 
@@ -43,7 +43,7 @@ jobs:
 | Name | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `github_token` | Yes | N/A | The standard GitHub token (`${{ secrets.GITHUB_TOKEN }}`) needed to fetch the PR diff and post inline comments. |
-| `fail_on_high_severity` | No | `true` | If set to `true`, the action will fail the build if verified High or Critical severity findings exist. |
+| `fail_on_high_severity` | No | `true` | Fail when an added PR line introduces a verified High or Critical finding. |
 
 ## Workflow
 

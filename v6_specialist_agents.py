@@ -165,7 +165,12 @@ class PromptInjectionHunter:
                 })
 
         # Check for missing input sanitization
-        if re.search(r'prompt\s*=\s*[f]?["\'].*\{.*\}.*["\']', code_context, re.IGNORECASE):
+        unsanitized_match = re.search(
+            r'prompt\s*=\s*[f]?["\'].*\{.*\}.*["\']',
+            code_context,
+            re.IGNORECASE,
+        )
+        if unsanitized_match:
             if not re.search(r'sanitize|escape|clean|validate|filter', code_context, re.IGNORECASE):
                 confidence = self._calculate_unsanitized_input_confidence(code_context)
 
@@ -176,6 +181,7 @@ class PromptInjectionHunter:
                     "severity": self._confidence_to_severity(confidence),
                     "cvss_score": self._confidence_to_cvss(confidence, "Critical"),
                     "file_path": file_path,
+                    "line_number": code_context[:unsanitized_match.start()].count("\n") + 1,
                     "code_evidence": "User input directly interpolated into prompt without sanitization",
                     "description": "User-controlled input is being directly inserted into LLM prompts without validation or sanitization",
                     "remediation": "Implement input validation, use delimiters, implement allowlisting, consider using a prompt template library",
@@ -288,7 +294,8 @@ class RAGSecurityAuditor:
         ]
 
         for pattern, db_name in vector_db_patterns:
-            if re.search(pattern, code_context):
+            vector_match = re.search(pattern, code_context)
+            if vector_match:
                 # Calculate confidence for vector DB detection
                 confidence = self._calculate_vector_db_confidence(code_context, pattern)
 
@@ -299,6 +306,7 @@ class RAGSecurityAuditor:
                     "severity": self._confidence_to_severity(confidence, base="Medium"),
                     "cvss_score": self._confidence_to_cvss(confidence, "Medium"),
                     "file_path": file_path,
+                    "line_number": code_context[:vector_match.start()].count("\n") + 1,
                     "code_evidence": f"Usage of {db_name} detected",
                     "description": f"Vector database ({db_name}) usage detected. Verify authorization checks and isolation.",
                     "remediation": "Implement user-level filtering, namespace isolation, encrypt embeddings at rest",
@@ -320,6 +328,7 @@ class RAGSecurityAuditor:
                         "severity": self._confidence_to_severity(isolation_confidence, base="High"),
                         "cvss_score": self._confidence_to_cvss(isolation_confidence, "High"),
                         "file_path": file_path,
+                        "line_number": code_context[:vector_match.start()].count("\n") + 1,
                         "code_evidence": f"No namespace/tenant isolation detected for {db_name}",
                         "description": "Vector DB queries lack namespace or tenant-level isolation, potentially allowing cross-user data access",
                         "remediation": "Implement namespace-based isolation, add user_id filters to all vector searches, encrypt data per-tenant",
@@ -331,7 +340,12 @@ class RAGSecurityAuditor:
                     })
 
         # Check for document ingestion without validation
-        if re.search(r'read_csv|read_json|read_pdf|load_documents|ingest', code_context, re.IGNORECASE):
+        ingestion_match = re.search(
+            r'read_csv|read_json|read_pdf|load_documents|ingest',
+            code_context,
+            re.IGNORECASE,
+        )
+        if ingestion_match:
             if not re.search(r'validate|sanitize|check|verify|scan', code_context, re.IGNORECASE):
                 ingestion_confidence = self._calculate_document_ingestion_confidence(code_context)
 
@@ -342,6 +356,7 @@ class RAGSecurityAuditor:
                     "severity": self._confidence_to_severity(ingestion_confidence, base="High"),
                     "cvss_score": self._confidence_to_cvss(ingestion_confidence, "High"),
                     "file_path": file_path,
+                    "line_number": code_context[:ingestion_match.start()].count("\n") + 1,
                     "code_evidence": "Document loading detected without validation",
                     "description": "Documents are being ingested into RAG pipeline without validation for malicious content or embedded prompts",
                     "remediation": "Scan documents for injection patterns, validate file types, implement content filtering before indexing",
@@ -498,7 +513,8 @@ class MCPToolSecurityAnalyst:
                 })
 
         # Check for MCP patterns
-        if re.search(r'mcp\.|ModelContextProtocol|@mcp', code_context, re.IGNORECASE):
+        mcp_match = re.search(r'mcp\.|ModelContextProtocol|@mcp', code_context, re.IGNORECASE)
+        if mcp_match:
             mcp_confidence = self._calculate_mcp_confidence(code_context)
 
             findings.append({
@@ -508,6 +524,7 @@ class MCPToolSecurityAnalyst:
                 "severity": self._confidence_to_severity(mcp_confidence, base="Medium"),
                 "cvss_score": self._confidence_to_cvss(mcp_confidence, "Medium"),
                 "file_path": file_path,
+                "line_number": code_context[:mcp_match.start()].count("\n") + 1,
                 "code_evidence": "MCP protocol usage detected",
                 "description": "MCP integration allows LLM to interact with external tools. Verify tool permissions and access controls.",
                 "remediation": "Implement tool-level authorization, audit tool capabilities, use allowlisting for tool access",
@@ -652,7 +669,8 @@ class AgentOrchestrationSecurity:
         ]
 
         for pattern, framework in agent_frameworks:
-            if re.search(pattern, code_context, re.IGNORECASE):
+            framework_match = re.search(pattern, code_context, re.IGNORECASE)
+            if framework_match:
                 framework_confidence = self._calculate_framework_confidence(code_context, pattern, framework)
 
                 findings.append({
@@ -662,6 +680,7 @@ class AgentOrchestrationSecurity:
                     "severity": self._confidence_to_severity(framework_confidence, base="Medium"),
                     "cvss_score": self._confidence_to_cvss(framework_confidence, "Medium"),
                     "file_path": file_path,
+                    "line_number": code_context[:framework_match.start()].count("\n") + 1,
                     "code_evidence": f"{framework} usage detected",
                     "description": f"Multi-agent system using {framework}. Verify agent identity management and role separation.",
                     "remediation": "Implement strong agent identity markers, validate agent roles, prevent role confusion attacks",
@@ -673,7 +692,12 @@ class AgentOrchestrationSecurity:
                 })
 
         # Check for goal/task injection
-        if re.search(r'goal\s*=|task\s*=|objective\s*=|instruction\s*=', code_context, re.IGNORECASE):
+        goal_match = re.search(
+            r'goal\s*=|task\s*=|objective\s*=|instruction\s*=',
+            code_context,
+            re.IGNORECASE,
+        )
+        if goal_match:
             if not re.search(r'validate|verify|sanitize|check|filter', code_context, re.IGNORECASE):
                 goal_confidence = self._calculate_goal_injection_confidence(code_context)
 
@@ -684,6 +708,7 @@ class AgentOrchestrationSecurity:
                     "severity": self._confidence_to_severity(goal_confidence, base="High"),
                     "cvss_score": self._confidence_to_cvss(goal_confidence, "High"),
                     "file_path": file_path,
+                    "line_number": code_context[:goal_match.start()].count("\n") + 1,
                     "code_evidence": "Goal/task assignment detected without validation",
                     "description": "Agent goals or tasks can potentially be hijacked if user input is used without validation",
                     "remediation": "Validate all goal/task inputs, implement goal allowlisting, monitor for goal drift",
@@ -794,7 +819,8 @@ class ModelDataPoisoningDetector:
         findings = []
 
         # Check for fine-tuning operations
-        if re.search(r'fine.?tune|lora|peft', code_context, re.IGNORECASE):
+        finetune_match = re.search(r'fine.?tune|lora|peft', code_context, re.IGNORECASE)
+        if finetune_match:
             finetune_confidence = self._calculate_finetune_confidence(code_context)
 
             findings.append({
@@ -804,6 +830,7 @@ class ModelDataPoisoningDetector:
                 "severity": self._confidence_to_severity(finetune_confidence, base="Medium"),
                 "cvss_score": self._confidence_to_cvss(finetune_confidence, "Medium"),
                 "file_path": file_path,
+                "line_number": code_context[:finetune_match.start()].count("\n") + 1,
                 "code_evidence": "Fine-tuning operation detected",
                 "description": "Model fine-tuning detected. Ensure training data is validated and from trusted sources.",
                 "remediation": "Validate training data sources, implement data provenance tracking, scan for trigger words",
@@ -815,7 +842,8 @@ class ModelDataPoisoningDetector:
             })
 
         # Check for dataset loading without validation
-        if re.search(r'load_dataset|datasets\.load', code_context, re.IGNORECASE):
+        dataset_match = re.search(r'load_dataset|datasets\.load', code_context, re.IGNORECASE)
+        if dataset_match:
             if not re.search(r'validate|verify|scan|check', code_context, re.IGNORECASE):
                 dataset_confidence = self._calculate_dataset_loading_confidence(code_context)
 
@@ -826,6 +854,7 @@ class ModelDataPoisoningDetector:
                     "severity": self._confidence_to_severity(dataset_confidence, base="High"),
                     "cvss_score": self._confidence_to_cvss(dataset_confidence, "High"),
                     "file_path": file_path,
+                    "line_number": code_context[:dataset_match.start()].count("\n") + 1,
                     "code_evidence": "Dataset loading without integrity checks",
                     "description": "Training dataset loaded without integrity checks - vulnerable to poisoning attacks",
                     "remediation": "Validate dataset sources, check signatures, scan for anomalies, implement data versioning",

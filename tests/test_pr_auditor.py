@@ -47,6 +47,124 @@ class PrAuditorTests(unittest.TestCase):
 
         self.assertEqual(pr_auditor.added_lines_from_patch(diff), {11, 12})
 
+    def test_findings_on_added_lines_excludes_preexisting_findings(self):
+        findings = [
+            {"file_path": "app.py", "line_number": 4, "title": "old"},
+            {"file_path": "app.py", "line_number": 8, "title": "new"},
+            {"file_path": "other.py", "line_number": 8, "title": "other"},
+        ]
+
+        introduced = pr_auditor.findings_on_added_lines(findings, {"app.py": {8}})
+
+        self.assertEqual([finding["title"] for finding in introduced], ["new"])
+
+    def test_resolve_changed_file_rejects_symlinks_and_escaped_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            safe_file = workspace / "component.tsx"
+            safe_file.write_text("export default null;\n", encoding="utf-8")
+            outside = Path(directory) / "outside.py"
+            outside.write_text("eval(user_input)\n", encoding="utf-8")
+            link = workspace / "linked.py"
+            link.symlink_to(outside)
+
+            self.assertEqual(
+                pr_auditor.resolve_changed_file(workspace, "component.tsx"),
+                safe_file,
+            )
+            self.assertIsNone(pr_auditor.resolve_changed_file(workspace, "linked.py"))
+            self.assertIsNone(pr_auditor.resolve_changed_file(workspace, "../outside.py"))
+
+    def test_scanner_failure_does_not_skip_later_agents(self):
+        class BrokenAgent:
+            def analyze(self, content, relative_path):
+                raise RuntimeError("broken scanner")
+
+        class WorkingAgent:
+            def analyze(self, content, relative_path):
+                return [{"file_path": relative_path, "line_number": 1}]
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "app.py"
+            source.write_text("print('ok')\n", encoding="utf-8")
+            with patch.object(
+                pr_auditor,
+                "ALL_SPECIALIST_AGENTS",
+                [BrokenAgent, WorkingAgent],
+            ):
+                findings = pr_auditor.scan_file_with_agents(source, "app.py")
+
+        self.assertEqual(findings, [{"file_path": "app.py", "line_number": 1}])
+
+    def test_action_supports_cli_source_extensions(self):
+        self.assertTrue({".jsx", ".tsx"}.issubset(pr_auditor.SUPPORTED_SUFFIXES))
+
+    def test_pr_gate_applies_only_to_findings_on_added_lines(self):
+        for finding_line, should_fail in ((1, False), (2, True)):
+            with self.subTest(finding_line=finding_line), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                source = workspace / "app.py"
+                source.write_text("old vulnerable line\nnew vulnerable line\n", encoding="utf-8")
+                event_path = workspace / "event.json"
+                event_path.write_text(
+                    json.dumps(
+                        {
+                            "repository": {"full_name": "owner/repo"},
+                            "pull_request": {
+                                "number": 7,
+                                "head": {"sha": "abc123"},
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                changed_files = [
+                    {
+                        "filename": "app.py",
+                        "status": "modified",
+                        "patch": "@@ -1,1 +1,2 @@\n old vulnerable line\n+new vulnerable line\n",
+                    }
+                ]
+                finding = {
+                    "file_path": "app.py",
+                    "line_number": finding_line,
+                    "severity": "High",
+                    "title": "Example issue",
+                    "category": "Example",
+                }
+                gauntlet_result = {
+                    "validated_findings": [finding],
+                    "fp_reduction_percentage": 0.0,
+                }
+                environment = {
+                    "GITHUB_TOKEN": "token",
+                    "GITHUB_EVENT_PATH": str(event_path),
+                    "GITHUB_WORKSPACE": str(workspace),
+                    "FAIL_ON_HIGH_SEVERITY": "true",
+                }
+
+                with (
+                    patch.dict("os.environ", environment, clear=True),
+                    patch.object(pr_auditor, "get_pr_files", return_value=changed_files),
+                    patch.object(pr_auditor, "scan_file_with_agents", return_value=[finding]),
+                    patch.object(pr_auditor, "VerificationGauntlet") as gauntlet,
+                    patch.object(pr_auditor, "LLMSecurityReasoningEngine"),
+                    patch.object(pr_auditor, "generate_sarif") as generate_sarif,
+                    patch.object(pr_auditor, "post_pr_review") as post_review,
+                ):
+                    gauntlet.return_value.verify.return_value = gauntlet_result
+                    if should_fail:
+                        with self.assertRaises(SystemExit) as raised:
+                            pr_auditor.main()
+                        self.assertEqual(raised.exception.code, 1)
+                        post_review.assert_called_once()
+                        self.assertEqual(generate_sarif.call_args.args[0], [finding])
+                    else:
+                        pr_auditor.main()
+                        post_review.assert_not_called()
+                        self.assertEqual(generate_sarif.call_args.args[0], [])
+
     def test_generate_sarif_uses_valid_rule_and_line_defaults(self):
         finding = {
             "owasp_llm_id": "",

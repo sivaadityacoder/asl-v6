@@ -623,6 +623,14 @@ class LLMSecurityReasoningEngine:
         self.provider = provider
         self.model = model
 
+    def _uses_nvidia(self) -> bool:
+        """Return whether live NVIDIA inference was explicitly or automatically selected."""
+        configured = bool(
+            os.environ.get("NVIDIA_API_KEY")
+            or (self.api_key and "nvapi-" in str(self.api_key))
+        )
+        return self.provider == "nvidia" or (self.provider == "auto" and configured)
+
     def reason_and_remediate(self, finding: dict, repo_path: Path = None) -> dict:
         """
         Executes a deep Chain-of-Thought (CoT) security reasoning loop on a validated finding
@@ -638,10 +646,14 @@ class LLMSecurityReasoningEngine:
         code_context = evidence
         if repo_path and file_path:
             try:
-                full_p = repo_path / file_path
-                if full_p.exists():
+                repo_root = Path(repo_path).resolve()
+                requested_path = Path(file_path)
+                candidate = requested_path if requested_path.is_absolute() else repo_root / requested_path
+                is_symlink = candidate.is_symlink()
+                full_p = candidate.resolve()
+                if not is_symlink and full_p.is_relative_to(repo_root) and full_p.is_file():
                     lines = full_p.read_text(encoding="utf-8", errors="ignore").splitlines()
-                    line_num = finding.get("line_number", 1)
+                    line_num = max(1, int(finding.get("line_number", 1)))
                     start_l = max(0, line_num - 5)
                     end_l = min(len(lines), line_num + 5)
                     code_context = "\n".join(lines[start_l:end_l])
@@ -654,7 +666,7 @@ class LLMSecurityReasoningEngine:
         )
 
         finding["llm_reasoning"] = {
-            "mindset": f"AI Security Red-Team Architect Chain-of-Thought ({'NVIDIA AI Endpoint' if os.environ.get('NVIDIA_API_KEY') or (self.api_key and 'nvapi-' in str(self.api_key)) else 'Expert Synthesis'})",
+            "mindset": f"AI Security Red-Team Architect Chain-of-Thought ({'NVIDIA AI Endpoint' if self._uses_nvidia() else 'Expert Synthesis'})",
             "thinking_process": thinking_log,
             "exploitability_assessment": exploit_scenario,
             "custom_code_patch": custom_patch,
@@ -746,7 +758,7 @@ class LLMSecurityReasoningEngine:
     def _synthesize_reasoning(self, title: str, category: str, context: str, file_path: str) -> tuple:
         """Synthesizes structured security reasoning and custom code remediation."""
         # Check if live NVIDIA API call is requested/configured
-        if os.environ.get("NVIDIA_API_KEY") or (self.api_key and "nvapi-" in str(self.api_key)) or self.provider == "nvidia":
+        if self._uses_nvidia():
             nv_res = self._call_nvidia_api(title, category, context, file_path)
             if nv_res:
                 return nv_res
@@ -1085,7 +1097,10 @@ if __name__ == "__main__":
             if dast_engine.docker_available:
                 console.print("   ✓ Docker Daemon Detected: [bold green]Active[/bold green]")
                 console.print("   → Running ephemeral Docker sandbox code execution test...")
-                sb_test = dast_engine.test_snippet_in_sandbox("eval('os.system(\"id\")')", "Unsafe Eval Execution")
+                sb_test = dast_engine.test_snippet_in_sandbox(
+                    "import os; print('ASL_V6_SANDBOX_EXPLOIT_SUCCESS'); os.system('id')",
+                    "Unsafe Eval Execution",
+                )
                 gauntlet_results["sandbox_proofs"] = sb_test
                 console.print(f"     Sandbox Exploit Verification: [bold red]{'EXPLOITABLE IN RUNTIME' if sb_test.get('verified_exploitable') else 'TRAPPED'}[/bold red]")
 

@@ -1,6 +1,25 @@
 # Changelog
 
-## 6.1.0 - Unreleased
+## 6.1.1 - 2026-07-30
+
+### Changed
+
+- PR reviews and severity gates now apply only to findings introduced on added diff lines.
+- PR remediation is forced to deterministic offline mode so CI never sends source context to an external model endpoint.
+- Benchmark reports are written below the caller's output root and default runs scan the current directory.
+
+### Fixed
+
+- Reject changed-file symlinks, workspace escapes, and oversized files in the PR action.
+- Continue running remaining specialist agents when one scanner fails on a changed file.
+- Scan JSX and TSX pull-request changes consistently with the stable CLI.
+- Attach accurate line numbers to every specialist-agent finding.
+- Confine remediation context reads to regular files inside the target repository.
+- Require an explicit sandbox proof marker instead of treating arbitrary `uid=` output as exploitation.
+- Correct the benchmark and standalone DAST proof snippets so they execute a valid runtime probe.
+- Validate sandbox timeout and image configuration before invoking Docker.
+
+## 6.1.0 - 2026-07-30
 
 ### Added
 

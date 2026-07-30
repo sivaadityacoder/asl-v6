@@ -34,11 +34,13 @@ try:
         VerificationGauntlet,
     )
     from v6_dynamic_sandbox import V6DynamicSandboxEngine
+    from v6_cli import iter_source_files
     from v6_specialist_agents import ALL_SPECIALIST_AGENTS
 except ImportError:
     ALL_SPECIALIST_AGENTS = []
     V6DynamicSandboxEngine = None
     TargetProfiler = None
+    iter_source_files = None
 
 
 class RealAISecurityBenchmark:
@@ -47,9 +49,9 @@ class RealAISecurityBenchmark:
     Runs actual AST discovery, specialist agent discovery, verification gauntlet,
     and DAST probing on real filesystem directories provided by the researcher.
     """
-    def __init__(self):
-        self.output_dir = Path(__file__).resolve().parent / "reports"
-        self.output_dir.mkdir(exist_ok=True)
+    def __init__(self, output_root: str | Path = "."):
+        self.output_dir = Path(output_root).expanduser().resolve() / "reports"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.dast_engine = V6DynamicSandboxEngine() if V6DynamicSandboxEngine else None
 
     def evaluate_real_target(self, repo_path: str) -> dict[str, Any]:
@@ -76,8 +78,7 @@ class RealAISecurityBenchmark:
             profiler.profile_repository(path_obj)
 
         # 2. Run Specialist Agents on source files
-        valid_extensions = {".py", ".js", ".ts", ".yaml", ".yml", ".json"}
-        source_files = [f for f in path_obj.rglob("*") if f.is_file() and f.suffix in valid_extensions and not any(p in f.parts for p in [".git", "__pycache__", "node_modules", ".venv", "reports", "artifacts", "logs", ".system_generated"])]
+        source_files = list(iter_source_files(path_obj)) if iter_source_files else []
 
         raw_signals = []
         for file_p in source_files:
@@ -104,7 +105,10 @@ class RealAISecurityBenchmark:
         # 4. Live DAST Sandbox verification check
         dast_status = "Skipped (No Docker)"
         if self.dast_engine and self.dast_engine.docker_available:
-            sb = self.dast_engine.test_snippet_in_sandbox("eval('os.system(\"id\")')", "Live Exploit Proof")
+            sb = self.dast_engine.test_snippet_in_sandbox(
+                "import os; print('ASL_V6_SANDBOX_EXPLOIT_SUCCESS'); os.system('id')",
+                "Live Exploit Proof",
+            )
             dast_status = "VERIFIED IN RUNTIME" if sb.get("verified_exploitable") else "SECURE RUNTIME"
 
         duration = round(time.time() - start_t, 2)
@@ -133,15 +137,7 @@ class RealAISecurityBenchmark:
         ))
 
         if not target_paths:
-            # Default to real local AI repositories on researcher machine
-            candidates = [
-                "/home/sivaaditya/langchain",
-                "/home/sivaaditya/langgraph",
-                "/home/sivaaditya/asl-private-research/asl-research-engine/v6"
-            ]
-            target_paths = [p for p in candidates if Path(p).exists()]
-            if not target_paths:
-                target_paths = ["."]
+            target_paths = ["."]
 
         console.print(f"\n[bold cyan]⚡ Executing Live Security Audits Across {len(target_paths)} Real Target Codebases...[/bold cyan]")
 
