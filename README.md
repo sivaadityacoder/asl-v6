@@ -95,3 +95,37 @@ An automated test engine helps find known patterns, but securing custom agent ar
 * **EU AI Act Technical Documentation ($3,500 - $5,000 fixed):** Technical robustness testing and adversarial documentation for European compliance.
 
 **Contact:** adityasecuritylabs@gmail.com | [GitHub Profile](https://github.com/sivaadityacoder)
+
+
+## CI/CD Integration (GitHub Action)
+
+ASL V6 includes a built-in Auto-Auditor GitHub Action to scan Pull Requests automatically.
+
+### One-Line Setup
+
+```yaml
+name: ASL V6 Security Scan
+
+on: [pull_request]
+
+jobs:
+  asl-v6-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      security-events: write
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: ASL V6 Auto-Auditor
+        uses: sivaadityacoder/asl-v6@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          asl_license_key: ${{ secrets.ASL_LICENSE_KEY }}
+          fail_on_high_severity: 'true'
+```
+
+The action will scan changed files, verify findings via the Gauntlet, and post inline PR comments automatically!
