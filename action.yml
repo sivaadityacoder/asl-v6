@@ -1,0 +1,41 @@
+name: "ASL V6 Auto-Auditor"
+description: "Automatically scans Pull Requests using ASL V6 and comments inline on verified issues."
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  github_token:
+    description: "GitHub Token for commenting on PRs and uploading SARIF"
+    required: true
+  asl_license_key:
+    description: "B2B Commercial Subscription Key for ASL V6"
+    required: true
+  fail_on_high_severity:
+    description: "Fail the CI if verified high-severity issues are found"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install ASL V6 Auditor Dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install rich requests pydantic urllib3 docker
+
+    - name: Run ASL V6 PR Auditor
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ASL_LICENSE_KEY: ${{ inputs.asl_license_key }}
+        FAIL_ON_HIGH_SEVERITY: ${{ inputs.fail_on_high_severity }}
+      run: |
+        echo "🔒 Running ASL V6 PR Auditor..."
+        python ${{ github.action_path }}/pr_auditor.py
