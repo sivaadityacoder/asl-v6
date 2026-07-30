@@ -8,13 +8,12 @@ Executes 100% REAL, live security scans across actual AI codebases (LangChain,
 LangGraph, local AI repos). Zero simulated numbers. Zero fake results.
 """
 
-import os
-import sys
 import json
+import sys
 import time
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any, Tuple
+from pathlib import Path
+from typing import Any
 
 try:
     from rich.console import Console
@@ -22,16 +21,20 @@ try:
     from rich.table import Table
 except ImportError:
     class Console:
-        def print(self, *args, **kwargs): print(*args)
+        def print(self, *args, **kwargs): pass
     Console = Console
 
 console = Console()
 
 # Import core V6 modules
 try:
-    from v6_ai_infra_security import TargetProfiler, VerificationGauntlet, LLMSecurityReasoningEngine
-    from v6_specialist_agents import ALL_SPECIALIST_AGENTS
+    from v6_ai_infra_security import (
+        LLMSecurityReasoningEngine,
+        TargetProfiler,
+        VerificationGauntlet,
+    )
     from v6_dynamic_sandbox import V6DynamicSandboxEngine
+    from v6_specialist_agents import ALL_SPECIALIST_AGENTS
 except ImportError:
     ALL_SPECIALIST_AGENTS = []
     V6DynamicSandboxEngine = None
@@ -49,7 +52,7 @@ class RealAISecurityBenchmark:
         self.output_dir.mkdir(exist_ok=True)
         self.dast_engine = V6DynamicSandboxEngine() if V6DynamicSandboxEngine else None
 
-    def evaluate_real_target(self, repo_path: str) -> Dict[str, Any]:
+    def evaluate_real_target(self, repo_path: str) -> dict[str, Any]:
         """Runs a live V6 assessment against a real target directory."""
         path_obj = Path(repo_path).resolve()
         if not path_obj.exists() or not path_obj.is_dir():
@@ -75,7 +78,7 @@ class RealAISecurityBenchmark:
         # 2. Run Specialist Agents on source files
         valid_extensions = {".py", ".js", ".ts", ".yaml", ".yml", ".json"}
         source_files = [f for f in path_obj.rglob("*") if f.is_file() and f.suffix in valid_extensions and not any(p in f.parts for p in [".git", "__pycache__", "node_modules", ".venv", "reports", "artifacts", "logs", ".system_generated"])]
-        
+
         raw_signals = []
         for file_p in source_files:
             try:
@@ -89,10 +92,10 @@ class RealAISecurityBenchmark:
                 pass
 
         # 3. Verification Gauntlet (AST False Positive Elimination)
-        gauntlet = VerificationGauntlet()
+        gauntlet = VerificationGauntlet(base_path=path_obj)
         gauntlet_res = gauntlet.verify(raw_signals)
         validated_tps = gauntlet_res.get("validated_findings", [])
-        
+
         raw_count = len(raw_signals)
         val_count = len(validated_tps)
         fp_eliminated = gauntlet_res.get("eliminated_fp_count", raw_count - val_count)
@@ -120,7 +123,7 @@ class RealAISecurityBenchmark:
             "status": "COMPLETED"
         }
 
-    def run_benchmark(self, target_paths: List[str] = None) -> Tuple[List[Dict[str, Any]], str, str]:
+    def run_benchmark(self, target_paths: list[str] = None) -> tuple[list[dict[str, Any]], str, str]:
         """Runs the real benchmark suite across specified target directories."""
         console.print(Panel.fit(
             "[bold red]ASL V6 Real AI Security Benchmark Runner[/bold red]\n"
@@ -141,7 +144,7 @@ class RealAISecurityBenchmark:
                 target_paths = ["."]
 
         console.print(f"\n[bold cyan]⚡ Executing Live Security Audits Across {len(target_paths)} Real Target Codebases...[/bold cyan]")
-        
+
         results = []
         for p in target_paths:
             res = self.evaluate_real_target(p)
@@ -155,7 +158,7 @@ class RealAISecurityBenchmark:
         avg_fp = round((total_fp / total_raw) * 100, 1) if total_raw > 0 else 0.0
 
         # Render Real Scorecard
-        if hasattr(Table, "__call__") or str(type(Table)) != "<class 'function'>":
+        if callable(Table) or str(type(Table)) != "<class 'function'>":
             try:
                 table = Table(title="ASL V6 Real Verified Benchmark Scorecard", show_header=True, header_style="bold yellow")
                 table.add_column("Repository / Target", style="bold white", width=28)
@@ -164,7 +167,7 @@ class RealAISecurityBenchmark:
                 table.add_column("Val TPs", justify="right", style="bold red", width=10)
                 table.add_column("FP Reduction", justify="right", style="bold green", width=14)
                 table.add_column("Live DAST Proof", style="magenta", width=22)
-                
+
                 for r in results:
                     table.add_row(
                         r["target_name"],
@@ -178,7 +181,7 @@ class RealAISecurityBenchmark:
             except Exception:
                 pass
 
-        console.print(f"\n[bold green]📊 Verified Live Aggregate Metrics:[/bold green]")
+        console.print("\n[bold green]📊 Verified Live Aggregate Metrics:[/bold green]")
         console.print(f"   • Real Files Scanned: [bold cyan]{total_files:,}[/bold cyan]")
         console.print(f"   • Real Raw Heuristics Detected: [yellow]{total_raw:,}[/yellow]")
         console.print(f"   • Real False Positives Eliminated: [green]{total_fp:,}[/green]")
@@ -193,19 +196,19 @@ class RealAISecurityBenchmark:
         self._export(results, md_file, json_file, total_files, total_raw, total_fp, total_val, avg_fp)
         return results, str(md_file), str(json_file)
 
-    def _export(self, results: List[Dict], md_path: Path, json_path: Path, t_files: int, t_raw: int, t_fp: int, t_val: int, avg_fp: float):
+    def _export(self, results: list[dict], md_path: Path, json_path: Path, t_files: int, t_raw: int, t_fp: int, t_val: int, avg_fp: float):
         md_content = f"""# ASL V6 Real AI Security Benchmark Report
 
-**Author:** Siva Aditya Panuganti (Security Researcher)  
-**Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}  
-**Methodology:** 100% Real Live Codebase Execution (Zero simulated data)  
-**Threat Matrices:** OWASP Top 10 LLM 2025, OWASP Top 10 Agent 2026, MITRE ATLAS  
+**Author:** Siva Aditya Panuganti (Security Researcher)
+**Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Methodology:** 100% Real Live Codebase Execution (Zero simulated data)
+**Threat Matrices:** OWASP Top 10 LLM 2025, OWASP Top 10 Agent 2026, MITRE ATLAS
 
 ---
 
 ## Executive Summary
 
-This report documents the actual live execution of the ASL V6 AI red-teaming engine across real repository targets. No simulated metrics or synthetic benchmark numbers are used.
+This report documents the actual live execution of the ASL V6 AI security scanner across real repository targets. No simulated metrics or synthetic benchmark numbers are used.
 
 ### Real Aggregate Metrics
 * **Total Source Files Scanned:** {t_files:,}
@@ -253,6 +256,6 @@ if __name__ == "__main__":
     runner = RealAISecurityBenchmark()
     targets = sys.argv[1:] if len(sys.argv) > 1 else None
     results, md_rep, json_rep = runner.run_benchmark(targets)
-    console.print(f"\n[bold cyan]✓ Real Benchmark Report Generated:[/bold cyan]")
+    console.print("\n[bold cyan]✓ Real Benchmark Report Generated:[/bold cyan]")
     console.print(f"   📄 Markdown: [underline]{md_rep}[/underline]")
     console.print(f"   📊 JSON Data: [underline]{json_rep}[/underline]")

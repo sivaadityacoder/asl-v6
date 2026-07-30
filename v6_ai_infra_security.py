@@ -12,23 +12,43 @@ Run:
   uv run python v6/v6_discovery_engine.py --query "langchain OR crewai" --output results.json
 """
 
-import sys
-import os
-import json
 import asyncio
+import json
+import os
+import sys
+import urllib.request
+
 try:
     import aiohttp
 except ImportError:
     aiohttp = None
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 import re
-import hashlib
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path
+
+from v6_version import __version__
+
+PROFILE_SUFFIXES = {".env", ".js", ".json", ".jsx", ".py", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
+PROFILE_EXCLUDED_DIRECTORIES = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "artifacts",
+    "build",
+    "dist",
+    "logs",
+    "node_modules",
+    "reports",
+    "vendor",
+}
+PROFILE_MAX_FILE_BYTES = 2_000_000
 
 # Add paths for imports
 _ROOT = Path(__file__).resolve().parent.parent
@@ -38,8 +58,8 @@ sys.path.append(str(_ROOT / "v4_asl_business"))
 sys.path.append(str(Path(__file__).resolve().parent))
 
 try:
-    from v6_specialist_agents import ALL_SPECIALIST_AGENTS, ASTContextFilter
     from v6_dynamic_sandbox import V6DynamicSandboxEngine
+    from v6_specialist_agents import ALL_SPECIALIST_AGENTS, ASTContextFilter
 except ImportError:
     ALL_SPECIALIST_AGENTS = []
     V6DynamicSandboxEngine = None
@@ -52,17 +72,17 @@ except ImportError:
 
 try:
     from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-    from rich.tree import Tree
-    from rich.syntax import Syntax
     from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+    from rich.syntax import Syntax
+    from rich.table import Table
+    from rich.tree import Tree
 except ImportError:
     # Fallback if rich not available
     class Console:
         def print(self, *args, **kwargs):
-            print(*args)
+            pass
     def Panel(*args, **kwargs): return ""
     def Table(*args, **kwargs): return ""
     class Progress:
@@ -78,14 +98,14 @@ console = Console()
 # ENUMS & DATA CLASSES
 # ─────────────────────────────────────────────────────────────────────
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     CRITICAL = "Critical"
     HIGH = "High"
     MEDIUM = "Medium"
     LOW = "Low"
     INFO = "Info"
 
-class VulnerabilityCategory(str, Enum):
+class VulnerabilityCategory(StrEnum):
     # OWASP Top 10 LLM 2025
     PROMPT_INJECTION = "LLM01: Prompt Injection"
     SENSITIVE_DISCLOSURE = "LLM02: Sensitive Information Disclosure"
@@ -97,7 +117,7 @@ class VulnerabilityCategory(str, Enum):
     VECTOR_WEAKNESS = "LLM08: Vector & Embedding Weaknesses"
     MISINFORMATION = "LLM09: Misinformation"
     UNBOUNDED_CONSUMPTION = "LLM10: Unbounded Consumption"
-    
+
     # OWASP Top 10 for Agents 2026
     AGENT_IDENTITY = "ASI01: Agent Identity Confusion"
     GOAL_FORMULATION = "ASI02: Insecure Goal Formulation"
@@ -109,7 +129,7 @@ class VulnerabilityCategory(str, Enum):
     CASCADING_FAILURE = "ASI08: Cascading Agent Failures"
     TRUST_EXPLOIT = "ASI09: Human-Agent Trust Exploitation"
     ROGUE_AGENT = "ASI10: Rogue Agents"
-    
+
     # MITRE ATLAS
     RECONNAISSANCE = "ATLAS: Reconnaissance"
     INITIAL_ACCESS = "ATLAS: Initial Access"
@@ -144,11 +164,11 @@ class AIFinding:
     cwe_id: str = ""
     mitre_atlas_id: str = ""
     owasp_llm_id: str = ""
-    references: List[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
     confidence_score: int = 0
     agent_source: str = ""
     timestamp: str = ""
-    
+
     def to_dict(self):
         return asdict(self)
 
@@ -157,14 +177,14 @@ class TargetProfile:
     url: str = ""
     name: str = ""
     description: str = ""
-    ai_frameworks: List[str] = field(default_factory=list)
-    components: List[str] = field(default_factory=list)
-    mcp_servers: List[str] = field(default_factory=list)
-    vector_dbs: List[str] = field(default_factory=list)
-    agents: List[str] = field(default_factory=list)
-    apis: List[str] = field(default_factory=list)
-    secrets_found: List[str] = field(default_factory=list)
-    tech_stack: List[str] = field(default_factory=list)
+    ai_frameworks: list[str] = field(default_factory=list)
+    components: list[str] = field(default_factory=list)
+    mcp_servers: list[str] = field(default_factory=list)
+    vector_dbs: list[str] = field(default_factory=list)
+    agents: list[str] = field(default_factory=list)
+    apis: list[str] = field(default_factory=list)
+    secrets_found: list[str] = field(default_factory=list)
+    tech_stack: list[str] = field(default_factory=list)
     risk_score: int = 0
     last_scanned: str = ""
 
@@ -174,36 +194,40 @@ class TargetProfile:
 
 class InternetDiscoveryEngine:
     """Discover AI/LLM projects across the entire internet"""
-    
+
     def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session: aiohttp.ClientSession | None = None
         self.results = []
-        
+
     async def __aenter__(self):
+        if aiohttp is None:
+            raise RuntimeError(
+                "Internet discovery requires aiohttp; install ASL V6 with the 'discovery' extra"
+            )
         connector = aiohttp.TCPConnector(limit=50, limit_per_host=10)
         timeout = aiohttp.ClientTimeout(total=60)
         self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
         return self
-        
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.close()
-    
-    async def search_github(self, query: str, limit: int = 50) -> List[dict]:
+
+    async def search_github(self, query: str, limit: int = 50) -> list[dict]:
         """Search GitHub for AI projects"""
         console.print(f"  [cyan]🔍 Searching GitHub: {query}[/cyan]")
         results = []
-        
+
         # GitHub API endpoint
         url = f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page={min(limit, 100)}"
-        
+
         try:
             headers = {"Accept": "application/vnd.github+json"}
             # If GITHUB_TOKEN is set, use it
             import os
             if token := os.getenv("GITHUB_TOKEN"):
                 headers["Authorization"] = f"Bearer {token}"
-            
+
             async with self.session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -222,14 +246,14 @@ class InternetDiscoveryEngine:
                     console.print(f"  [yellow]⚠️  GitHub API returned {resp.status}[/yellow]")
         except Exception as e:
             console.print(f"  [red]❌ GitHub search error: {e}[/red]")
-        
+
         return results
-    
-    async def search_huggingface(self, query: str, limit: int = 50) -> List[dict]:
+
+    async def search_huggingface(self, query: str, limit: int = 50) -> list[dict]:
         """Search Hugging Face for AI models and spaces"""
         console.print(f"  [cyan]🤗 Searching Hugging Face: {query}[/cyan]")
         results = []
-        
+
         try:
             # Search models
             url = f"https://huggingface.co/api/models?search={query}&limit={limit}"
@@ -247,7 +271,7 @@ class InternetDiscoveryEngine:
                             "pipeline_tag": model.get("pipeline_tag", ""),
                             "updated_at": model.get("lastModified", "")
                         })
-            
+
             # Search spaces
             url = f"https://huggingface.co/api/spaces?search={query}&limit={limit//2}"
             async with self.session.get(url) as resp:
@@ -265,34 +289,34 @@ class InternetDiscoveryEngine:
                         })
         except Exception as e:
             console.print(f"  [red]❌ Hugging Face search error: {e}[/red]")
-        
+
         return results
-    
-    async def search_pypi(self, query: str, limit: int = 50) -> List[dict]:
+
+    async def search_pypi(self, query: str, limit: int = 50) -> list[dict]:
         """Search PyPI for AI packages"""
         console.print(f"  [cyan]📦 Searching PyPI: {query}[/cyan]")
         results = []
-        
+
         try:
             url = f"https://pypi.org/search/?q={query}"
             async with self.session.get(url) as resp:
                 if resp.status == 200:
-                    text = await resp.text()
+                    await resp.text()
                     # Parse search results (simplified)
                     # In production, use the PyPI JSON API: https://pypi.org/pypi/{package}/json
                     pass
         except Exception as e:
             console.print(f"  [red]❌ PyPI search error: {e}[/red]")
-        
+
         return results
-    
-    async def discover_targets(self, search_queries: List[str]) -> List[dict]:
+
+    async def discover_targets(self, search_queries: list[str]) -> list[dict]:
         """Run comprehensive internet discovery"""
         console.print("\n[bold magenta]🌐 Internet Discovery Engine[/bold magenta]")
         console.print("   Searching GitHub, Hugging Face, PyPI for AI projects...\n")
-        
+
         all_results = []
-        
+
         async with self:
             for query in search_queries:
                 tasks = [
@@ -300,11 +324,11 @@ class InternetDiscoveryEngine:
                     self.search_huggingface(query, limit=20),
                 ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                
+
                 for result in results:
                     if isinstance(result, list):
                         all_results.extend(result)
-        
+
         console.print(f"\n[green]✓ Discovered {len(all_results)} AI projects[/green]\n")
         return all_results
 
@@ -314,7 +338,7 @@ class InternetDiscoveryEngine:
 
 class TargetProfiler:
     """Analyze discovered targets to identify AI stack and components"""
-    
+
     AI_FRAMEWORK_PATTERNS = {
         "LangChain": ["langchain", "langgraph", "langsmith"],
         "LlamaIndex": ["llama_index", "llama-index"],
@@ -329,7 +353,7 @@ class TargetProfiler:
         "LMQL": ["lmql"],
         "Guidance": ["guidance"],
     }
-    
+
     COMPONENT_PATTERNS = {
         "Vector DB": ["chroma", "qdrant", "pinecone", "weaviate", "milvus", "faiss"],
         "MCP Server": ["mcp", "model-context-protocol"],
@@ -337,87 +361,101 @@ class TargetProfiler:
         "RAG": ["rag", "retrieval", "embedding"],
         "Fine-tuning": ["lora", "peft", "fine-tune", "rlhf"],
     }
-    
+
     def profile_repository(self, repo_path: Path) -> TargetProfile:
         """Profile a local repository"""
+        repo_path = Path(repo_path).resolve()
         profile = TargetProfile(
             url=str(repo_path),
             name=repo_path.name,
             last_scanned=datetime.now().isoformat()
         )
-        
+
+        searchable_files = self._read_searchable_files(repo_path)
+
         # Scan for AI frameworks
         for framework, patterns in self.AI_FRAMEWORK_PATTERNS.items():
             for pattern in patterns:
-                if self._search_files(repo_path, pattern):
+                if self._search_files(searchable_files, pattern):
                     profile.ai_frameworks.append(framework)
                     break
-        
+
         # Scan for components
         for component, patterns in self.COMPONENT_PATTERNS.items():
             for pattern in patterns:
-                if self._search_files(repo_path, pattern):
+                if self._search_files(searchable_files, pattern):
                     profile.components.append(component)
                     break
-        
+
         # Scan for secrets
-        profile.secrets_found = self._scan_secrets(repo_path)
-        
+        profile.secrets_found = self._scan_secrets(repo_path, searchable_files)
+
         # Calculate risk score
         profile.risk_score = self._calculate_risk(profile)
-        
+
         return profile
-    
-    def _search_files(self, path: Path, pattern: str) -> bool:
-        """Search for pattern in files"""
+
+    def _iter_searchable_files(self, path: Path):
+        """Yield bounded source/configuration files while skipping generated content."""
         try:
             for file in path.rglob("*"):
-                if file.is_file() and file.suffix in [".py", ".js", ".ts", ".json", ".yaml", ".yml", ".toml"]:
-                    try:
-                        content = file.read_text(errors="ignore").lower()
-                        if pattern.lower() in content:
-                            return True
-                    except:
-                        pass
-            return False
-        except:
-            return False
-    
-    def _scan_secrets(self, path: Path) -> List[str]:
+                try:
+                    relative_parts = file.relative_to(path).parts
+                    if any(part in PROFILE_EXCLUDED_DIRECTORIES for part in relative_parts):
+                        continue
+                    suffix = ".env" if file.name == ".env" else file.suffix.lower()
+                    if (
+                        file.is_file()
+                        and not file.is_symlink()
+                        and suffix in PROFILE_SUFFIXES
+                        and file.stat().st_size <= PROFILE_MAX_FILE_BYTES
+                    ):
+                        yield file
+                except (OSError, ValueError):
+                    continue
+        except OSError:
+            return
+
+    def _read_searchable_files(self, path: Path) -> list[tuple[Path, str]]:
+        files = []
+        for file in self._iter_searchable_files(path):
+            try:
+                files.append((file, file.read_text(encoding="utf-8", errors="ignore")))
+            except OSError:
+                continue
+        return files
+
+    def _search_files(self, files: list[tuple[Path, str]], pattern: str) -> bool:
+        """Search already-bounded repository content for a case-insensitive pattern."""
+        needle = pattern.lower()
+        return any(needle in content.lower() for _, content in files)
+
+    def _scan_secrets(self, path: Path, files: list[tuple[Path, str]]) -> list[str]:
         """Scan for exposed secrets"""
         secrets = []
         secret_patterns = [
-            (r'api[_-]?key\s*[=:]\s*["\']([A-Za-z0-9_\-]{20,})', "API Key"),
-            (r'secret\s*[=:]\s*["\']([A-Za-z0-9_\-]{20,})', "Secret"),
-            (r'password\s*[=:]\s*["\']([A-Za-z0-9_\-@#!]{8,})', "Password"),
-            (r'token\s*[=:]\s*["\']([A-Za-z0-9_\-\.]{20,})', "Token"),
+            (r'api[_-]?key\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})', "API Key"),
+            (r'secret\s*[=:]\s*["\']?([A-Za-z0-9_\-]{20,})', "Secret"),
+            (r'password\s*[=:]\s*["\']?([A-Za-z0-9_\-@#!]{8,})', "Password"),
+            (r'token\s*[=:]\s*["\']?([A-Za-z0-9_\-\.]{20,})', "Token"),
             (r'AWS_ACCESS_KEY_ID\s*[=:]\s*["\']?([A-Z0-9]{20})', "AWS Access Key"),
             (r'AWS_SECRET_ACCESS_KEY\s*[=:]\s*["\']?([A-Za-z0-9/+=]{40})', "AWS Secret"),
         ]
-        
-        try:
-            for file in path.rglob("*"):
-                if file.is_file() and file.suffix in [".py", ".js", ".env", ".json", ".yaml", ".yml"]:
-                    try:
-                        content = file.read_text(errors="ignore")
-                        for pattern, secret_type in secret_patterns:
-                            matches = re.findall(pattern, content, re.IGNORECASE)
-                            if matches:
-                                secrets.append(f"{secret_type} in {file.relative_to(path)}")
-                    except:
-                        pass
-        except:
-            pass
-        
+
+        for file, content in files:
+            for pattern, secret_type in secret_patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    secrets.append(f"{secret_type} in {file.relative_to(path)}")
+
         return secrets[:20]  # Limit to first 20
-    
+
     def _calculate_risk(self, profile: TargetProfile) -> int:
         """Calculate overall risk score (0-100)"""
         score = 0
-        
+
         # More AI frameworks = higher risk
         score += min(len(profile.ai_frameworks) * 10, 30)
-        
+
         # Sensitive components
         if "Vector DB" in profile.components:
             score += 15
@@ -425,10 +463,10 @@ class TargetProfiler:
             score += 15
         if "Agent Framework" in profile.components:
             score += 10
-        
+
         # Secrets exposure
         score += min(len(profile.secrets_found) * 5, 30)
-        
+
         return min(score, 100)
 
 
@@ -440,10 +478,11 @@ class VerificationGauntlet:
     """
     Layers 6-9: Deduplication, Contextual Filtering, and 93% False Positive Elimination.
     """
-    def __init__(self, confidence_threshold: int = 65):
+    def __init__(self, confidence_threshold: int = 65, base_path: Path = None):
         self.confidence_threshold = confidence_threshold
+        self.base_path = Path(base_path).resolve() if base_path else None
 
-    def verify(self, raw_findings: List[dict]) -> dict:
+    def verify(self, raw_findings: list[dict]) -> dict:
         total_raw = len(raw_findings)
         if total_raw == 0:
             return {
@@ -454,11 +493,16 @@ class VerificationGauntlet:
                 "severity_counts": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
             }
 
-        # Step 1: Deduplication based on category, file, line
+        # Step 1: Deduplication based on finding identity and location
         seen_keys = set()
         deduped = []
         for f in raw_findings:
-            key = (f.get("category", ""), f.get("file_path", ""), f.get("line_number", 0))
+            key = (
+                f.get("category", ""),
+                f.get("title", ""),
+                f.get("file_path", ""),
+                f.get("line_number", 0),
+            )
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped.append(f)
@@ -487,22 +531,48 @@ class VerificationGauntlet:
             # Rule 3: Check line content in file for scanner rule definitions, regex literals, and demo blocks
             line_num = f.get("line_number", 0)
             line_text = ""
+            source_text = ""
             try:
-                if file_path and Path(file_path).exists():
-                    lines = Path(file_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+                finding_path = Path(file_path)
+                if self.base_path and not finding_path.is_absolute():
+                    finding_path = self.base_path / finding_path
+                finding_path = finding_path.resolve()
+                is_in_base = not self.base_path or finding_path.is_relative_to(self.base_path)
+                if file_path and is_in_base and finding_path.is_file():
+                    source_text = finding_path.read_text(encoding="utf-8", errors="ignore")
+                    lines = source_text.splitlines()
                     if 0 < line_num <= len(lines):
-                        start_idx = max(0, line_num - 2)
-                        end_idx = min(len(lines), line_num + 1)
-                        line_text = "\n".join(lines[start_idx:end_idx])
+                        line_text = lines[line_num - 1]
             except Exception:
                 pass
 
-            if any(ind in line_text or ind in evidence or ind in desc or ind in str(file_path) for ind in ["\\s*", "\\.", "\\(", "r\"", "r'", "re.compile", "re.search", "re.finditer", "(r'", "(r\"", "INJECTION_PATTERNS", "DANGEROUS_SINKS", "SECRET_PATTERNS", "RED_PATTERNS", "test_code", "eval(code", "PAYLOADS", "VULNERABILITIES", "PATTERNS", "RULE", "self.INJECTION", "vector_db_patterns", "os.system", "bounty_hunter", "bug_bounty", "v6_specialist_agents", "v6_ai_infra_security"]):
+            scanner_sources = {
+                "bounty_hunter.py",
+                "bug_bounty_hunter.py",
+                "bug_bounty_hunter_enhanced.py",
+                "v6_ai_infra_security.py",
+                "v6_specialist_agents.py",
+            }
+            rule_markers = (
+                "INJECTION_PATTERNS",
+                "DANGEROUS_SINKS",
+                "SECRET_PATTERNS",
+                "RED_PATTERNS",
+                "PAYLOADS",
+                "VULNERABILITIES",
+                "re.compile",
+                "re.finditer",
+                "re.search",
+            )
+            escaped_regex = any(marker in evidence for marker in ("\\s*", "\\.", "\\("))
+            if Path(file_path).name in scanner_sources or escaped_regex or any(
+                marker in line_text for marker in rule_markers
+            ):
                 eliminated_count += 1
                 continue
 
             # Rule 3.5: Eliminate matches inside docstrings or comment blocks
-            if ASTContextFilter.is_in_comment_or_docstring(line_text, 2):
+            if source_text and ASTContextFilter.is_in_comment_or_docstring(source_text, line_num):
                 eliminated_count += 1
                 continue
 
@@ -512,7 +582,7 @@ class VerificationGauntlet:
                 continue
 
             # Mark high confidence items as validated true positives
-            f["validation_status"] = "VERIFIED (TRUE POSITIVE)"
+            f["validation_status"] = "HIGH_CONFIDENCE_STATIC_FINDING"
             validated.append(f)
 
         # Sort validated by CVSS descending
@@ -545,9 +615,8 @@ class LLMSecurityReasoningEngine:
     """
     Layer 10: LLM-powered Semantic Reasoning & Custom Patch Generation.
     Embodies an AI red-team / security architect 'thinking mindset'.
-    
-    Supports real API providers (OpenAI, Anthropic, Gemini, Ollama) and features
-    an offline Expert Reasoning Simulator for reliable client prototype demos.
+
+        Supports NVIDIA NIM endpoints and an offline deterministic remediation fallback.
     """
     def __init__(self, api_key: str = None, provider: str = "auto", model: str = "auto"):
         self.api_key = api_key or os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
@@ -563,7 +632,7 @@ class LLMSecurityReasoningEngine:
         category = finding.get("category", "General AI Security")
         evidence = finding.get("code_evidence", "")
         file_path = finding.get("file_path", "")
-        desc = finding.get("description", "")
+        finding.get("description", "")
 
         # 1. Gather code context from file if available
         code_context = evidence
@@ -593,7 +662,7 @@ class LLMSecurityReasoningEngine:
         }
         return finding
 
-    def _call_nvidia_api(self, title: str, category: str, context: str, file_path: str) -> Optional[tuple]:
+    def _call_nvidia_api(self, title: str, category: str, context: str, file_path: str) -> tuple | None:
         """
         Executes live inference using NVIDIA NIM / AI Endpoints (e.g., Llama 3.1 Nemotron 70B or DeepSeek R1).
         Requires NVIDIA_API_KEY environment variable.
@@ -601,11 +670,11 @@ class LLMSecurityReasoningEngine:
         api_key = self.api_key or os.environ.get("NVIDIA_API_KEY")
         if not api_key:
             return None
-            
+
         base_url = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").rstrip("/")
         endpoint = f"{base_url}/chat/completions" if not base_url.endswith("/chat/completions") else base_url
         model_name = self.model if self.model != "auto" else "nvidia/llama-3.1-nemotron-70b-instruct"
-        
+
         prompt = (
             f"Act as an expert AI Red-Team Security Architect.\n"
             f"Analyze this security finding in an AI codebase:\n"
@@ -623,7 +692,7 @@ class LLMSecurityReasoningEngine:
             f"EXPLOITABILITY: [State exploitability level and impact]\n"
             f"PATCH:\n```python\n[Write secure drop-in code fix here]\n```"
         )
-        
+
         payload = {
             "model": model_name,
             "messages": [
@@ -633,7 +702,7 @@ class LLMSecurityReasoningEngine:
             "temperature": 0.2,
             "max_tokens": 1024
         }
-        
+
         try:
             req = urllib.request.Request(
                 endpoint,
@@ -649,18 +718,18 @@ class LLMSecurityReasoningEngine:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     content = data["choices"][0]["message"]["content"]
-                    
+
                     thinking = ""
                     if "<THINKING>" in content and "</THINKING>" in content:
                         thinking = content.split("<THINKING>")[1].split("</THINKING>")[0].strip()
                         thinking = f"<THINKING>\n{thinking}\n</THINKING>"
                     else:
                         thinking = f"<THINKING>\n{content[:300]}...\n</THINKING>"
-                        
+
                     scenario = "Verified via NVIDIA AI Endpoint"
                     if "EXPLOITABILITY:" in content:
                         scenario = content.split("EXPLOITABILITY:")[1].split("PATCH:")[0].strip()
-                        
+
                     patch = ""
                     if "```python" in content:
                         patch = content.split("```python")[1].split("```")[0].strip()
@@ -668,88 +737,7 @@ class LLMSecurityReasoningEngine:
                         patch = content.split("PATCH:")[1].strip()
                     else:
                         patch = f"# Secure patch generated by NVIDIA NIM ({model_name})\n# See remediation instructions."
-                        
-                    return thinking, patch, scenario
-        except Exception:
-            pass
-        return None
 
-    def _call_ollama_api(self, title: str, category: str, context: str, file_path: str) -> Optional[tuple]:
-        """
-        Executes local offline inference using Ollama (e.g., deepseek-coder:6.7b or llama3).
-        Requires local Ollama daemon running on port 11434.
-        """
-        base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-        endpoint = f"{base_url}/api/chat"
-        model_name = os.environ.get("OLLAMA_MODEL", self.model if self.model not in ["auto", "nvidia/llama-3.1-nemotron-70b-instruct"] else "deepseek-coder:6.7b")
-        
-        prompt = (
-            f"Act as an expert AI Red-Team Security Architect.\n"
-            f"Analyze this security finding in an AI codebase:\n"
-            f"- Title: {title}\n"
-            f"- Category: {category}\n"
-            f"- File: {file_path}\n"
-            f"- Code Context:\n```python\n{context}\n```\n\n"
-            f"Respond EXACTLY in this format:\n"
-            f"<THINKING>\n"
-            f"1. ANALYZE SOURCE: ...\n"
-            f"2. EVALUATE FLOW: ...\n"
-            f"3. ATTACK VECTOR: ...\n"
-            f"4. DEFENSE STRATEGY: ...\n"
-            f"</THINKING>\n"
-            f"EXPLOITABILITY: [State exploitability level and impact]\n"
-            f"PATCH:\n```python\n[Write secure drop-in code fix here]\n```"
-        )
-        
-        payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": "You are ASL V6 AI Security Architect."},
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False,
-            "options": {
-                "temperature": 0.2,
-                "num_predict": 1024
-            }
-        }
-        
-        try:
-            req = urllib.request.Request(
-                endpoint,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "ASL-V6-Ollama-Local/1.0"
-                },
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=15.0) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    content = data.get("message", {}).get("content", "")
-                    if not content:
-                        return None
-                        
-                    thinking = ""
-                    if "<THINKING>" in content and "</THINKING>" in content:
-                        thinking = content.split("<THINKING>")[1].split("</THINKING>")[0].strip()
-                        thinking = f"<THINKING>\n{thinking}\n</THINKING>"
-                    else:
-                        thinking = f"<THINKING>\n{content[:300]}...\n</THINKING>"
-                        
-                    scenario = f"Verified via Local Ollama ({model_name})"
-                    if "EXPLOITABILITY:" in content:
-                        scenario = content.split("EXPLOITABILITY:")[1].split("PATCH:")[0].strip()
-                        
-                    patch = ""
-                    if "```python" in content:
-                        patch = content.split("```python")[1].split("```")[0].strip()
-                    elif "PATCH:" in content:
-                        patch = content.split("PATCH:")[1].strip()
-                    else:
-                        patch = f"# Secure patch generated by local Ollama ({model_name})\n# See remediation instructions."
-                        
                     return thinking, patch, scenario
         except Exception:
             pass
@@ -762,12 +750,6 @@ class LLMSecurityReasoningEngine:
             nv_res = self._call_nvidia_api(title, category, context, file_path)
             if nv_res:
                 return nv_res
-
-        # Check if local Ollama inference is requested/configured
-        if self.provider == "ollama" or os.environ.get("OLLAMA_MODEL") or os.environ.get("USE_OLLAMA") == "1":
-            ollama_res = self._call_ollama_api(title, category, context, file_path)
-            if ollama_res:
-                return ollama_res
 
         if "Prompt Injection" in category or "Prompt Injection" in title:
             thinking = (
@@ -867,13 +849,15 @@ class SecurityReportGenerator:
     """
     Generates structured Markdown and JSON reports for executive and technical review.
     """
-    def generate(self, profile: TargetProfile, gauntlet_results: dict, output_dir: Path) -> Tuple[Path, Path]:
+    def generate(self, profile: TargetProfile, gauntlet_results: dict, output_dir: Path) -> tuple[Path, Path]:
         reports_dir = output_dir / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        md_file = reports_dir / f"ASL_V6_REPORT_{profile.name}_{timestamp}.md"
-        json_file = reports_dir / f"ASL_V6_REPORT_{profile.name}_{timestamp}.json"
+        report_time = datetime.now()
+        timestamp = report_time.strftime("%Y%m%d_%H%M%S_%f")
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", profile.name).strip("._") or "target"
+
+        md_file = reports_dir / f"ASL_V6_REPORT_{safe_name}_{timestamp}.md"
+        json_file = reports_dir / f"ASL_V6_REPORT_{safe_name}_{timestamp}.json"
 
         validated = gauntlet_results.get("validated_findings", [])
         sev = gauntlet_results.get("severity_counts", {})
@@ -883,8 +867,9 @@ class SecurityReportGenerator:
             "scan_metadata": {
                 "target_name": profile.name,
                 "target_path": str(profile.url),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": report_time.isoformat(),
                 "engine": "ASL V6 AI Infrastructure & LLM Security Platform",
+                "engine_version": __version__,
                 "standards": ["OWASP Top 10 LLM 2025", "OWASP Top 10 for Agents 2026", "MITRE ATLAS"]
             },
             "profile": profile.to_dict() if hasattr(profile, 'to_dict') else profile.__dict__,
@@ -893,7 +878,9 @@ class SecurityReportGenerator:
                 "eliminated_false_positives": gauntlet_results.get("eliminated_fp_count", 0),
                 "false_positive_reduction_rate": f"{gauntlet_results.get('fp_reduction_percentage', 0.0)}%",
                 "validated_findings_count": len(validated),
-                "severity_counts": sev
+                "severity_counts": sev,
+                "files_scanned": gauntlet_results.get("scan_summary", {}).get("files_scanned"),
+                "scan_errors": gauntlet_results.get("scan_summary", {}).get("scan_errors", 0),
             },
             "findings": validated
         }
@@ -903,9 +890,9 @@ class SecurityReportGenerator:
         # Write Markdown Report
         md_content = f"""# ASL V6 Security Assessment Report: {profile.name}
 
-**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
-**Target Repository:** `{profile.url}`  
-**Overall Risk Score:** **{profile.risk_score}/100**  
+**Date:** {report_time.strftime('%Y-%m-%d %H:%M:%S')}
+**Target Repository:** `{profile.url}`
+**Overall Risk Score:** **{profile.risk_score}/100**
 
 ---
 
@@ -917,7 +904,7 @@ The ASL V6 Security Engine scanned **{profile.name}** deploying all 10 Specialis
 * **Total Raw Findings Detected:** {gauntlet_results.get('total_raw_count', 0)}
 * **False Positives Eliminated:** {gauntlet_results.get('eliminated_fp_count', 0)} (Test suites, docstrings, mock data, and low-confidence noise removed)
 * **False Positive Reduction Rate:** **{gauntlet_results.get('fp_reduction_percentage', 0.0)}%**
-* **Validated True Positives:** **{len(validated)}**
+* **High-Confidence Static Findings:** **{len(validated)}**
 
 ### Severity Breakdown
 * 🔴 **Critical:** {sev.get('Critical', 0)}
@@ -938,7 +925,7 @@ The ASL V6 Security Engine scanned **{profile.name}** deploying all 10 Specialis
 
 """
         if not validated:
-            md_content += "*No high-confidence security vulnerabilities were identified in production code.* \n"
+            md_content += "*No high-confidence static security findings were identified in production code.* \n"
         else:
             for idx, finding in enumerate(validated, 1):
                 md_content += f"""### {idx}. [{finding.get('severity', 'Medium')}] {finding.get('title', 'Untitled Finding')}
@@ -974,14 +961,14 @@ The ASL V6 Security Engine scanned **{profile.name}** deploying all 10 Specialis
             md_content += "## 🧪 Layer 11: Dynamic Docker Sandbox & Live DAST Probing Results\n\n"
             if "sandbox_proofs" in gauntlet_results:
                 sb = gauntlet_results["sandbox_proofs"]
-                md_content += f"### Ephemeral Sandbox Code Execution Verification\n"
+                md_content += "### Ephemeral Sandbox Code Execution Verification\n"
                 md_content += f"* **Status:** `{sb.get('status', 'N/A')}`\n"
                 md_content += f"* **Container Image:** `{sb.get('container_image', 'python:3.11-slim')}`\n"
                 md_content += f"* **Runtime Exploitability:** **{'🚨 EXPLOITABLE IN RUNTIME' if sb.get('verified_exploitable') else '🟢 TRAPPED / SECURE'}**\n"
                 md_content += f"* **Proof Summary:** {sb.get('proof_summary', '')}\n\n"
-            
+
             if "dast_probes" in gauntlet_results and gauntlet_results["dast_probes"]:
-                md_content += f"### Live Host AI Container Cyber Range Probes\n"
+                md_content += "### Live Host AI Container Cyber Range Probes\n"
                 md_content += "| Service Name | Target Endpoint | DAST Status | Exposed Endpoints |\n"
                 md_content += "| :--- | :--- | :--- | :--- |\n"
                 for p in gauntlet_results["dast_probes"]:
@@ -1004,16 +991,16 @@ if __name__ == "__main__":
         console.print("[red]Usage: python v6_ai_infra_security.py <github_url_or_path>[/red]")
         console.print("[dim]Example: python v6_ai_infra_security.py https://github.com/langchain-ai/langchain[/dim]")
         sys.exit(1)
-    
+
     console.print(Panel.fit(
         "[bold red]ASL V6[/bold red]\\n"
         "[bold white]AI Infrastructure & LLM Security Platform[/bold white]\\n"
         "[dim]Powered by OWASP Top 10 LLM 2025, OWASP Top 10 for Agents 2026, MITRE ATLAS[/dim]",
         border_style="red"
     ))
-    
+
     target = sys.argv[1]
-    
+
     # Phase 1: Discovery
     console.print("\n[bold magenta]Phase 1: Target Discovery[/bold magenta]")
     if target.startswith("http"):
@@ -1025,32 +1012,32 @@ if __name__ == "__main__":
         if not repo_path.exists():
             console.print(f"[red]Error: Path not found: {repo_path}[/red]")
             sys.exit(1)
-        
+
         # Phase 2: Profiling
         console.print("\n[bold magenta]Phase 2: Target Profiling[/bold magenta]")
         profiler = TargetProfiler()
         profile = profiler.profile_repository(repo_path)
-        
+
         console.print(f"\n[bold]Repository:[/bold] {profile.name}")
         console.print(f"[bold]AI Frameworks:[/bold] {', '.join(profile.ai_frameworks) or 'None detected'}")
         console.print(f"[bold]Components:[/bold] {', '.join(profile.components) or 'None detected'}")
         console.print(f"[bold]Risk Score:[/bold] {profile.risk_score}/100")
-        
+
         if profile.secrets_found:
-            console.print(f"\n[yellow]⚠️  Secrets Detected:[/yellow]")
+            console.print("\n[yellow]⚠️  Secrets Detected:[/yellow]")
             for secret in profile.secrets_found[:5]:
                 console.print(f"   - {secret}")
-        
+
         # Phase 3: Deploying Specialist Agents
         console.print("\n[bold magenta]Phase 3: Deploying 10 Specialist Security Agents[/bold magenta]")
         all_raw_findings = []
-        
+
         # Scan code files in repository
         valid_extensions = {".py", ".js", ".ts", ".yaml", ".yml", ".json"}
         files_to_scan = [f for f in repo_path.rglob("*") if f.is_file() and f.suffix in valid_extensions and not any(p in f.parts for p in [".git", "__pycache__", "node_modules", ".venv", "reports", "artifacts", "logs", ".system_generated"])]
-        
+
         console.print(f"   Scanning [cyan]{len(files_to_scan)}[/cyan] target source files across repository...")
-        
+
         for file_p in files_to_scan:
             try:
                 content = file_p.read_text(encoding="utf-8", errors="ignore")
@@ -1059,20 +1046,20 @@ if __name__ == "__main__":
                     agent = AgentClass()
                     findings = agent.analyze(content, rel_path)
                     all_raw_findings.extend(findings)
-            except Exception as e:
+            except Exception:
                 pass
-                
+
         console.print(f"   → Detected [yellow]{len(all_raw_findings)}[/yellow] raw heuristic signals across agents.")
-        
+
         # Phase 4-10: Verification Gauntlet & FP Reduction
         console.print("\n[bold magenta]Phase 4-10: The Verification Gauntlet (AST False Positive Elimination)[/bold magenta]")
-        gauntlet = VerificationGauntlet(confidence_threshold=65)
+        gauntlet = VerificationGauntlet(confidence_threshold=65, base_path=repo_path)
         gauntlet_results = gauntlet.verify(all_raw_findings)
-        
+
         console.print(f"   ✓ Eliminated [green]{gauntlet_results['eliminated_fp_count']}[/green] false positives (test noise, docstrings, low confidence)")
         console.print(f"   ✓ False Positive Reduction Rate: [bold green]{gauntlet_results['fp_reduction_percentage']}%[/bold green]")
         console.print(f"   ✓ Validated True Positives: [bold red]{len(gauntlet_results['validated_findings'])}[/bold red]")
-        
+
         # Phase 10: LLM Security Reasoning & Validation Layer
         console.print("\n[bold magenta]Phase 10: AI Red-Team LLM Reasoning & Validation Layer (Thinking Mindset)[/bold magenta]")
         reasoning_engine = LLMSecurityReasoningEngine()
@@ -1082,7 +1069,7 @@ if __name__ == "__main__":
             for idx in range(min(len(validated_list), 5)):
                 f_item = validated_list[idx]
                 reasoning_engine.reason_and_remediate(f_item, repo_path)
-            
+
             # Display sample reasoning snippet for client demo
             sample_f = validated_list[0]
             if "llm_reasoning" in sample_f:
@@ -1090,7 +1077,7 @@ if __name__ == "__main__":
                 for t_line in sample_f["llm_reasoning"]["thinking_process"].splitlines()[:6]:
                     console.print(f"      [dim]{t_line}[/dim]")
                 console.print("      [dim]...[/dim]")
-        
+
         # Phase 11: Dynamic Docker Sandbox & Live DAST Probing
         console.print("\n[bold magenta]Phase 11: Dynamic Docker Sandbox & Live Container Probing (DAST)[/bold magenta]")
         if V6DynamicSandboxEngine:
@@ -1101,7 +1088,7 @@ if __name__ == "__main__":
                 sb_test = dast_engine.test_snippet_in_sandbox("eval('os.system(\"id\")')", "Unsafe Eval Execution")
                 gauntlet_results["sandbox_proofs"] = sb_test
                 console.print(f"     Sandbox Exploit Verification: [bold red]{'EXPLOITABLE IN RUNTIME' if sb_test.get('verified_exploitable') else 'TRAPPED'}[/bold red]")
-                
+
                 console.print("   → Probing live local AI Cyber Range & MCP containers...")
                 probes = dast_engine.probe_live_containers()
                 gauntlet_results["dast_probes"] = probes
@@ -1110,15 +1097,15 @@ if __name__ == "__main__":
                 console.print("   [yellow]⚠️ Docker daemon not detected. Skipping dynamic container sandbox tests.[/yellow]")
         else:
             console.print("   [yellow]⚠️ V6DynamicSandboxEngine module not loaded.[/yellow]")
-        
+
         # Phase 12: Executive Reporting
         console.print("\n[bold magenta]Phase 12: Executive & Technical Reporting[/bold magenta]")
         generator = SecurityReportGenerator()
         md_report, json_report = generator.generate(profile, gauntlet_results, repo_path)
-        
+
         # Display summary table
         validated_findings = gauntlet_results["validated_findings"]
-        if hasattr(Table, "__call__") or str(type(Table)) != "<class 'function'>":
+        if callable(Table) or str(type(Table)) != "<class 'function'>":
             try:
                 table = Table(title="ASL V6 Validated Security Findings", show_header=True, header_style="bold cyan")
                 table.add_column("Sev", style="bold", width=8)
@@ -1126,7 +1113,7 @@ if __name__ == "__main__":
                 table.add_column("Vulnerability Title", width=36)
                 table.add_column("Location", width=24)
                 table.add_column("Conf", justify="right", width=6)
-                
+
                 for f in validated_findings[:15]:  # show top 15
                     sev_color = "red" if f.get("severity") == "Critical" else ("yellow" if f.get("severity") == "High" else "green")
                     table.add_row(
@@ -1145,7 +1132,7 @@ if __name__ == "__main__":
         else:
             for f in validated_findings:
                 console.print(f"  - [{f.get('severity')}] {f.get('title')} ({f.get('file_path')}:{f.get('line_number')})")
-                
-        console.print(f"\n[bold green]✓ Assessment Complete![/bold green]")
+
+        console.print("\n[bold green]✓ Assessment Complete![/bold green]")
         console.print(f"   📄 Markdown Report: [underline]{md_report}[/underline]")
         console.print(f"   📊 JSON Data Report: [underline]{json_report}[/underline]\n")

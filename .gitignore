@@ -22,6 +22,7 @@ var/
 .installed.cfg
 *.egg
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .venv
@@ -54,3 +55,5 @@ build/
 # Mock Repos
 mock_repos/
 .vercel
+reports/
+asl-v6-results.sarif

@@ -15,13 +15,10 @@ Agents implemented:
 5. ModelDataPoisoningDetector (POI-05) - OWASP LLM04
 """
 
-import sys
-import json
-import re
 import ast
+import re
+import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set, Tuple
-from datetime import datetime
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "v2"))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "v4_asl_business"))
@@ -31,7 +28,7 @@ try:
     from rich.panel import Panel
 except ImportError:
     class Console:
-        def print(self, *args, **kwargs): print(*args)
+        def print(self, *args, **kwargs): pass
     def Panel(*args, **kwargs): return ""
 
 console = Console()
@@ -42,18 +39,44 @@ console = Console()
 
 class ASTContextFilter:
     """Helper class to eliminate false positives using AST parsing and context analysis."""
+
+    TEST_DIRECTORIES = {
+        ".github",
+        "benchmark",
+        "benchmarks",
+        "demo",
+        "demos",
+        "doc",
+        "docs",
+        "example",
+        "examples",
+        "fixtures",
+        "integration_tests",
+        "spec",
+        "specs",
+        "test",
+        "testing",
+        "tests",
+        "unit_tests",
+    }
+
     @staticmethod
     def is_test_file(file_path: str) -> bool:
         if not file_path:
             return False
-        fp = file_path.lower().replace("\\", "/")
-        test_indicators = [
-            "/tests/", "/test/", "/spec/", "/specs/", "/unit_tests/", "/integration_tests/",
-            "test_", "_test.py", "conftest.py", "mock_", "/fixtures/", "/testing/",
-            "/examples/", "/demo/", "/benchmarks/", ".github/", "/docs/",
-            ".yml", ".yaml", ".md", ".json", ".toml", ".lock", ".txt", ".ini", ".cfg", ".html"
-        ]
-        return any(ind in fp for ind in test_indicators)
+        parts = [part for part in file_path.lower().replace("\\", "/").split("/") if part]
+        if not parts:
+            return False
+        filename = parts[-1]
+        if any(part in ASTContextFilter.TEST_DIRECTORIES for part in parts[:-1]):
+            return True
+        return (
+            filename in {"conftest.py", "test.py", "tests.py"}
+            or filename.startswith(("test_", "mock_"))
+            or filename.endswith(
+                ("_test.py", "_test.js", "_test.jsx", "_test.ts", "_test.tsx", ".spec.js", ".spec.ts")
+            )
+        )
 
     @staticmethod
     def is_in_comment_or_docstring(code: str, line_num: int) -> bool:
@@ -67,8 +90,8 @@ class ASTContextFilter:
             tree = ast.parse(code)
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
-                    if (node.body and isinstance(node.body[0], ast.Expr) and 
-                        isinstance(node.body[0].value, ast.Constant) and 
+                    if (node.body and isinstance(node.body[0], ast.Expr) and
+                        isinstance(node.body[0].value, ast.Constant) and
                         isinstance(node.body[0].value.value, str)):
                         doc_node = node.body[0]
                         if hasattr(doc_node, 'lineno') and hasattr(doc_node, 'end_lineno'):
@@ -86,45 +109,43 @@ class ASTContextFilter:
 class PromptInjectionHunter:
     """
     OWASP LLM01: Prompt Injection Specialist
-    
+
     Detects: Direct injection, indirect injection, jailbreaks, guardrail bypass
     """
-    
+
     AGENT_ID = "CIA-01"
     DISPLAY_NAME = "🎯 Prompt Injection Hunter"
-    
+
     INJECTION_PATTERNS = [
         # Direct injection patterns
         r"ignore\s+(previous|all|above)\s+instructions",
         r"disregard\s+(previous|all|above)",
         r"forget\s+(everything|all|previous)",
         r"###\s*(Instruction|System|User)",
-        
+
         # Jailbreak patterns
         r"DAN\s*[:\(]",
         r"developer\s+mode",
         r"without\s+restrictions",
         r"bypass\s+(safety|content\s+policy)",
-        
+
         # Indirect injection
         r"<\s*script[^>]*>",
-        r"{{\s*.*\s*}}",
-        r"\{\%\s*.*\s*\%\}",
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         """Scan for prompt injection vulnerabilities with confidence scoring"""
         findings = []
-        
+
         # Search for injection patterns
         for pattern in self.INJECTION_PATTERNS:
             matches = re.finditer(pattern, code_context, re.IGNORECASE | re.MULTILINE)
             for match in matches:
                 line_num = code_context[:match.start()].count('\n') + 1
-                
+
                 # Calculate confidence based on context
                 confidence = self._calculate_injection_confidence(code_context, match)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": "Potential Prompt Injection Vector",
@@ -142,12 +163,12 @@ class PromptInjectionHunter:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": confidence < 75
                 })
-        
+
         # Check for missing input sanitization
         if re.search(r'prompt\s*=\s*[f]?["\'].*\{.*\}.*["\']', code_context, re.IGNORECASE):
             if not re.search(r'sanitize|escape|clean|validate|filter', code_context, re.IGNORECASE):
                 confidence = self._calculate_unsanitized_input_confidence(code_context)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": "Unsanitized User Input in Prompt",
@@ -164,57 +185,57 @@ class PromptInjectionHunter:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": confidence < 80
                 })
-        
+
         return findings
-    
+
     def _calculate_injection_confidence(self, code_context: str, match: re.Match) -> int:
         """Calculate confidence for injection pattern matches."""
         confidence = 60  # Base confidence
-        
+
         # Get context around the match
         start = max(0, match.start() - 100)
         end = min(len(code_context), match.end() + 100)
         context = code_context[start:end].lower()
-        
+
         # Increase confidence if it looks like actual code (not comment/example)
         if not any(indicator in context[:50] for indicator in ['#', '//', '/*', '<!--']):
             confidence += 15
-            
+
         # Increase if it's in a string that looks like it might be user input
         if any(indicator in context for indicator in ['input', 'query', 'user', 'request', 'data']):
             confidence += 10
-            
+
         # Decrease if it's clearly in a comment or documentation
         if any(indicator in context[:50] for indicator in ['#', '//', '/*', '<!--', 'example', 'demo', 'tutorial']):
             confidence -= 25
-            
+
         # Decrease if it's in a test file
         if 'test' in code_context.lower()[:50]:
             confidence -= 15
-            
+
         return max(20, min(95, confidence))
-    
+
     def _calculate_unsanitized_input_confidence(self, code_context: str) -> int:
         """Calculate confidence for unsanitized input detection."""
         confidence = 70  # Base confidence
-        
+
         # Check if it looks like production code vs example/tutorial
         context = code_context.lower()
-        
+
         # Decrease if it's clearly example/tutorial code
         if any(indicator in context for indicator in ['#', '//', '/*', 'example', 'demo', 'tutorial', 'sample']):
             confidence -= 25
-            
+
         # Decrease if it's in a test file
         if 'test' in context[:100]:
             confidence -= 15
-            
+
         # Increase if there are other security-related patterns nearby
         if any(indicator in context for indicator in ['password', 'secret', 'key', 'token', 'auth']):
             confidence += 10
-            
+
         return max(30, min(95, confidence))
-    
+
     def _confidence_to_severity(self, confidence: int) -> str:
         """Convert confidence score to severity level."""
         if confidence >= 85:
@@ -223,7 +244,7 @@ class PromptInjectionHunter:
             return "Medium"
         else:
             return "Low"
-    
+
     def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
         """Convert confidence score to CVSS score."""
         base_scores = {
@@ -232,7 +253,7 @@ class PromptInjectionHunter:
             "Medium": 5.5,
             "Low": 3.0
         }
-        
+
         base_score = base_scores.get(base_severity, 5.0)
         confidence_factor = 0.5 + (confidence / 200)  # 0.5 to 1.0
         adjusted_score = min(10.0, base_score * confidence_factor)
@@ -246,17 +267,17 @@ class PromptInjectionHunter:
 class RAGSecurityAuditor:
     """
     OWASP LLM08: Vector & Embedding Weaknesses
-    
+
     Detects: Missing authorization, namespace isolation failures, document injection
     """
-    
+
     AGENT_ID = "RAG-02"
     DISPLAY_NAME = "📚 RAG Security Auditor"
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         """Scan for RAG-specific vulnerabilities with confidence scoring"""
         findings = []
-        
+
         # Check for vector DB usage
         vector_db_patterns = [
             (r'chroma\.|Chroma\(', "ChromaDB"),
@@ -265,12 +286,12 @@ class RAGSecurityAuditor:
             (r'weaviate|Weaviate', "Weaviate"),
             (r'milvus|Milvus', "Milvus"),
         ]
-        
+
         for pattern, db_name in vector_db_patterns:
             if re.search(pattern, code_context):
                 # Calculate confidence for vector DB detection
                 confidence = self._calculate_vector_db_confidence(code_context, pattern)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": f"{db_name} Vector Database Detected",
@@ -287,11 +308,11 @@ class RAGSecurityAuditor:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": confidence < 60
                 })
-                
+
                 # Check for namespace usage
                 if not re.search(r'namespace|tenant|user_id|filter|access_control', code_context, re.IGNORECASE):
                     isolation_confidence = self._calculate_isolation_confidence(code_context)
-                    
+
                     findings.append({
                         "id": f"{self.AGENT_ID}-{len(findings)}",
                         "title": f"Missing Namespace Isolation in {db_name}",
@@ -300,7 +321,7 @@ class RAGSecurityAuditor:
                         "cvss_score": self._confidence_to_cvss(isolation_confidence, "High"),
                         "file_path": file_path,
                         "code_evidence": f"No namespace/tenant isolation detected for {db_name}",
-                        "description": f"Vector DB queries lack namespace or tenant-level isolation, potentially allowing cross-user data access",
+                        "description": "Vector DB queries lack namespace or tenant-level isolation, potentially allowing cross-user data access",
                         "remediation": "Implement namespace-based isolation, add user_id filters to all vector searches, encrypt data per-tenant",
                         "cwe_id": "CWE-284",
                         "owasp_llm_id": "LLM08:2025",
@@ -308,12 +329,12 @@ class RAGSecurityAuditor:
                         "agent_source": self.DISPLAY_NAME,
                         "validation_required": isolation_confidence < 70
                     })
-        
+
         # Check for document ingestion without validation
         if re.search(r'read_csv|read_json|read_pdf|load_documents|ingest', code_context, re.IGNORECASE):
             if not re.search(r'validate|sanitize|check|verify|scan', code_context, re.IGNORECASE):
                 ingestion_confidence = self._calculate_document_ingestion_confidence(code_context)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": "Document Ingestion Without Validation",
@@ -330,65 +351,65 @@ class RAGSecurityAuditor:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": ingestion_confidence < 75
                 })
-        
+
         return findings
-    
+
     def _calculate_vector_db_confidence(self, code_context: str, pattern: str) -> int:
         """Calculate confidence for vector DB detection."""
         confidence = 50  # Base confidence
-        
+
         # Increase if it looks like actual usage (not just import/declaration)
         context = code_context.lower()
         if any(indicator in context for indicator in ['=', '(', ')', '.', 'chroma', 'qdrant', 'pinecone']):
             confidence += 20
-            
+
         # Decrease if it's in a comment or example
-        if any(indicator in code_context[max(0, code_context.find(pattern)-50):code_context.find(pattern)] 
+        if any(indicator in code_context[max(0, code_context.find(pattern)-50):code_context.find(pattern)]
                for indicator in ['#', '//', '/*', '<!--', 'example', 'demo']):
             confidence -= 25
-            
+
         return max(20, min(90, confidence))
-    
+
     def _calculate_isolation_confidence(self, code_context: str) -> int:
         """Calculate confidence for missing namespace isolation detection."""
         confidence = 60  # Base confidence
-        
+
         # Increase if there are multiple users or obvious multi-tenant context
         context = code_context.lower()
         if any(indicator in context for indicator in ['user', 'customer', 'client', 'tenant', 'account']):
             confidence += 15
-            
+
         # Decrease if it's clearly example/tutorial code
         if any(indicator in context for indicator in ['#', '//', '/*', 'example', 'demo', 'tutorial']):
             confidence -= 20
-            
+
         # Increase if there are security-related patterns nearby
         if any(indicator in context for indicator in ['auth', 'permission', 'access', 'role']):
             confidence += 10
-            
+
         return max(25, min(90, confidence))
-    
+
     def _calculate_document_ingestion_confidence(self, code_context: str) -> int:
         """Calculate confidence for document ingestion detection."""
         confidence = 65  # Base confidence (slightly higher as this is often problematic)
-        
+
         # Check context to see if it's likely production code
         context = code_context.lower()
-        
+
         # Decrease if it's clearly example/tutorial code
         if any(indicator in context for indicator in ['#', '//', '/*', 'example', 'demo', 'tutorial', 'sample']):
             confidence -= 25
-            
+
         # Decrease if it's in a test file
         if 'test' in context[:100]:
             confidence -= 15
-            
+
         # Increase if there are security-conscious patterns nearby
         if any(indicator in context for indicator in ['validate', 'sanitize', 'filter', 'check']):
             confidence += 15  # Shows awareness of need for validation
-            
+
         return max(30, min(95, confidence))
-    
+
     def _confidence_to_severity(self, confidence: int, base: str = "Medium") -> str:
         """Convert confidence score to severity level with base adjustment."""
         if base == "Medium":
@@ -405,7 +426,7 @@ class RAGSecurityAuditor:
                 return "Medium"
             else:
                 return "Low"
-    
+
     def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
         """Convert confidence score to CVSS score."""
         base_scores = {
@@ -414,7 +435,7 @@ class RAGSecurityAuditor:
             "Medium": 5.5,
             "Low": 3.0
         }
-        
+
         base_score = base_scores.get(base_severity, 5.0)
         confidence_factor = 0.5 + (confidence / 200)  # 0.5 to 1.0
         adjusted_score = min(10.0, base_score * confidence_factor)
@@ -429,32 +450,35 @@ class MCPToolSecurityAnalyst:
     """
     OWASP ASI04: Insecure Tool Execution
     OWASP ASI05: Unexpected Code Execution
-    
+
     Detects: Unauthorized tool invocation, SSRF, shell injection, file access abuse
     """
-    
+
     AGENT_ID = "MCP-03"
     DISPLAY_NAME = "🔧 MCP & Tool Security Analyst"
-    
+
     DANGEROUS_PATTERNS = [
         (r'subprocess\.(run|call|Popen|check_output)', "Subprocess Execution", "Critical", "CWE-78"),
         (r'os\.system\(', "OS System Call", "Critical", "CWE-78"),
         (r'eval\s*\(', "Eval Usage", "Critical", "CWE-94"),
         (r'exec\s*\(', "Exec Usage", "Critical", "CWE-94"),
         (r'requests\.(get|post|put|delete)\(', "HTTP Requests", "Medium", "CWE-918"),
-        (r'urllib\.request', "URL Requests", "Medium", "CWE-918"),
+        (r'urllib\.request\.urlopen\s*\(', "URL Requests", "Medium", "CWE-918"),
         (r'socket\.', "Socket Operations", "Medium", "CWE-918"),
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         """Scan for MCP and tool security issues with confidence scoring"""
         findings = []
-        
+
         # Check for tool execution patterns
         for pattern, desc, severity, cwe in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, code_context):
-                confidence = self._calculate_tool_confidence(code_context, pattern, desc)
-                
+            for match in re.finditer(pattern, code_context):
+                line_number = code_context[:match.start()].count("\n") + 1
+                if ASTContextFilter.is_in_comment_or_docstring(code_context, line_number):
+                    continue
+                confidence = self._calculate_tool_confidence(code_context, match, desc)
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": f"Potentially Dangerous: {desc}",
@@ -462,7 +486,8 @@ class MCPToolSecurityAnalyst:
                     "severity": self._confidence_to_severity(confidence, severity),
                     "cvss_score": self._confidence_to_cvss(confidence, severity),
                     "file_path": file_path,
-                    "code_evidence": f"Pattern detected: {pattern[:50]}",
+                    "line_number": line_number,
+                    "code_evidence": match.group(0)[:100],
                     "description": f"Code contains {desc} which could be exploited if LLM output is used without validation",
                     "remediation": "Implement strict allowlisting for tool execution, validate all inputs, use principle of least privilege",
                     "cwe_id": cwe,
@@ -471,11 +496,11 @@ class MCPToolSecurityAnalyst:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": confidence < 65
                 })
-        
+
         # Check for MCP patterns
         if re.search(r'mcp\.|ModelContextProtocol|@mcp', code_context, re.IGNORECASE):
             mcp_confidence = self._calculate_mcp_confidence(code_context)
-            
+
             findings.append({
                 "id": f"{self.AGENT_ID}-{len(findings)}",
                 "title": "MCP (Model Context Protocol) Integration Detected",
@@ -492,63 +517,77 @@ class MCPToolSecurityAnalyst:
                 "agent_source": self.DISPLAY_NAME,
                 "validation_required": mcp_confidence < 60
             })
-        
+
         return findings
-    
-    def _calculate_tool_confidence(self, code_context: str, pattern: str, desc: str) -> int:
+
+    def _calculate_tool_confidence(self, code_context: str, match: re.Match, desc: str) -> int:
         """Calculate confidence for dangerous tool usage detection."""
-        confidence = 55  # Base confidence
-        
-        # Get context around the match
-        matches = list(re.finditer(pattern, code_context))
-        if not matches:
-            return confidence
-            
-        # Use the first match for context analysis
-        match = matches[0]
-        start = max(0, match.start() - 100)
-        end = min(len(code_context), match.end() + 100)
+        if desc in {"Eval Usage", "Exec Usage", "OS System Call"}:
+            confidence = 60
+        elif desc == "Subprocess Execution":
+            confidence = 45
+        else:
+            confidence = 30
+
+        start = max(0, match.start() - 160)
+        end = min(len(code_context), match.end() + 160)
         context = code_context[start:end].lower()
-        
-        # Increase confidence if it looks like actual usage (not just import/declaration)
-        if any(indicator in context for indicator in ['=', '(', ')', '.', 'call', 'run', 'exec']):
-            confidence += 20
-            
+        call_tail = code_context[match.end():min(len(code_context), match.end() + 100)].lstrip()
+
+        execution_inputs = (
+            "user_input", "user_query", "request.", "response", "llm_output", "prompt", "query",
+        )
+        network_inputs = ("user_input", "user_url", "request.", "target_url", "query")
+        relevant_inputs = (
+            network_inputs
+            if desc in {"HTTP Requests", "URL Requests", "Socket Operations"}
+            else execution_inputs
+        )
+        if any(indicator in context for indicator in relevant_inputs):
+            confidence += 30
+
+        if desc == "Subprocess Execution" and "shell=true" in context.replace(" ", ""):
+            confidence += 30
+
+        if call_tail.startswith(("'", '"', "[", "(")):
+            confidence -= 25
+
+        if desc == "Subprocess Execution" and any(
+            marker in context for marker in ("--cap-drop", "no-new-privileges", "shell=false")
+        ):
+            confidence -= 25
+
         # Decrease if it's in a comment or example/documentation
         if any(indicator in context[:50] for indicator in ['#', '//', '/*', '<!--', 'example', 'demo', 'tutorial']):
             confidence -= 25
-            
-        # Decrease if it's in a test file
-        if 'test' in code_context.lower()[:50]:
-            confidence -= 15
-            
-        # Increase if there are security-conscious patterns nearby (validation, checking)
-        if any(indicator in context for indicator in ['validate', 'check', 'verify', 'sanitize']):
-            confidence += 15
-            
+
+        # Validation and allowlisting lower exploitability confidence.
+        if any(indicator in context for indicator in ['allowlist', 'sanitize', 'validate']):
+            confidence -= 20
+
         return max(20, min(90, confidence))
-    
+
     def _calculate_mcp_confidence(self, code_context: str) -> int:
         """Calculate confidence for MCP integration detection."""
         confidence = 50  # Base confidence
-        
+
         context = code_context.lower()
-        
+
         # Increase if it looks like actual usage (not just import)
         if any(indicator in context for indicator in ['=', '(', ')', '.', 'mcp', 'server', 'tool']):
             confidence += 20
-            
+
         # Decrease if it's in a comment or example
-        if any(indicator in code_context[max(0, code_context.find('mcp')-50):code_context.find('mcp')] 
+        if any(indicator in code_context[max(0, code_context.find('mcp')-50):code_context.find('mcp')]
                for indicator in ['#', '//', '/*', '<!--', 'example', 'demo']):
             confidence -= 25
-            
+
         # Increase if there are security-related patterns nearby
         if any(indicator in context for indicator in ['auth', 'permission', 'access', 'role', 'validate']):
             confidence += 15
-            
+
         return max(20, min(90, confidence))
-    
+
     def _confidence_to_severity(self, confidence: int, base: str = "Medium") -> str:
         """Convert confidence score to severity level with base adjustment."""
         if base == "Critical":
@@ -572,7 +611,7 @@ class MCPToolSecurityAnalyst:
                 return "Medium"
             else:
                 return "Low"
-    
+
     def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
         """Convert confidence score to CVSS score."""
         base_scores = {
@@ -581,7 +620,7 @@ class MCPToolSecurityAnalyst:
             "Medium": 5.5,
             "Low": 3.0
         }
-        
+
         base_score = base_scores.get(base_severity, 5.0)
         confidence_factor = 0.5 + (confidence / 200)  # 0.5 to 1.0
         adjusted_score = min(10.0, base_score * confidence_factor)
@@ -595,27 +634,27 @@ class MCPToolSecurityAnalyst:
 class AgentOrchestrationSecurity:
     """
     OWASP Top 10 for Agents 2026
-    
+
     Detects: Agent identity confusion, goal hijacking, cascading failures
     """
-    
+
     AGENT_ID = "AGN-04"
     DISPLAY_NAME = "🤖 Agent Orchestration Security"
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         """Scan for agent orchestration vulnerabilities with confidence scoring"""
         findings = []
-        
+
         agent_frameworks = [
             (r'crewai|CrewAI', "CrewAI"),
             (r'autogen|AutoGen', "AutoGen"),
             (r'langgraph|LangGraph', "LangGraph"),
         ]
-        
+
         for pattern, framework in agent_frameworks:
             if re.search(pattern, code_context, re.IGNORECASE):
                 framework_confidence = self._calculate_framework_confidence(code_context, pattern, framework)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": f"{framework} Agent Framework Detected",
@@ -632,12 +671,12 @@ class AgentOrchestrationSecurity:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": framework_confidence < 55
                 })
-        
+
         # Check for goal/task injection
         if re.search(r'goal\s*=|task\s*=|objective\s*=|instruction\s*=', code_context, re.IGNORECASE):
             if not re.search(r'validate|verify|sanitize|check|filter', code_context, re.IGNORECASE):
                 goal_confidence = self._calculate_goal_injection_confidence(code_context)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": "Agent Goals/Tasks Set Without Validation",
@@ -654,55 +693,55 @@ class AgentOrchestrationSecurity:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": goal_confidence < 70
                 })
-        
+
         return findings
-    
+
     def _calculate_framework_confidence(self, code_context: str, pattern: str, framework: str) -> int:
         """Calculate confidence for agent framework detection."""
         confidence = 45  # Base confidence (lower as framework usage alone isn't necessarily a vuln)
-        
+
         context = code_context.lower()
-        
+
         # Increase if it looks like actual usage (not just import)
         if any(indicator in context for indicator in ['=', '(', ')', '.', 'agent', 'crew', 'task']):
             confidence += 25
-            
+
         # Decrease if it's in a comment or example
-        if any(indicator in code_context[max(0, code_context.find(pattern.lower())-50):code_context.find(pattern.lower())] 
+        if any(indicator in code_context[max(0, code_context.find(pattern.lower())-50):code_context.find(pattern.lower())]
                for indicator in ['#', '//', '/*', '<!--', 'example', 'demo', 'tutorial']):
             confidence -= 20
-            
+
         # Increase if there are security-related patterns nearby (auth, validation)
         if any(indicator in context for indicator in ['auth', 'permission', 'access', 'role', 'validate']):
             confidence += 15
-            
+
         return max(20, min(85, confidence))
-    
+
     def _calculate_goal_injection_confidence(self, code_context: str) -> int:
         """Calculate confidence for goal/task injection detection."""
         confidence = 60  # Base confidence
-        
+
         # Check if the goal/task assignment looks like it could accept user input
         context = code_context.lower()
-        
+
         # Look for patterns that suggest user input could flow into goal/task
         if any(indicator in context for indicator in ['request', 'input', 'user', 'args', 'params', 'query']):
             confidence += 20
-            
+
         # Decrease if it's clearly hardcoded/example
         if any(indicator in context for indicator in ['"hello world"', "'test'", '"example"', 'todo', 'fixme']):
             confidence -= 25
-            
+
         # Decrease if it's in a comment or documentation
         if any(indicator in code_context[:100] for indicator in ['#', '//', '/*', '<!--']):
             confidence -= 15
-            
+
         # Increase if there are security-conscious patterns nearby
         if any(indicator in context for indicator in ['validate', 'check', 'verify', 'sanitize']):
             confidence += 15
-            
+
         return max(25, min(90, confidence))
-    
+
     def _confidence_to_severity(self, confidence: int, base: str = "Medium") -> str:
         """Convert confidence score to severity level with base adjustment."""
         if base == "High":
@@ -719,7 +758,7 @@ class AgentOrchestrationSecurity:
                 return "Medium"
             else:
                 return "Low"
-    
+
     def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
         """Convert confidence score to CVSS score."""
         base_scores = {
@@ -728,7 +767,7 @@ class AgentOrchestrationSecurity:
             "Medium": 5.5,
             "Low": 3.0
         }
-        
+
         base_score = base_scores.get(base_severity, 5.0)
         confidence_factor = 0.5 + (confidence / 200)  # 0.5 to 1.0
         adjusted_score = min(10.0, base_score * confidence_factor)
@@ -743,21 +782,21 @@ class ModelDataPoisoningDetector:
     """
     OWASP LLM04: Data & Model Poisoning
     MITRE ATLAS: ML Dataset Access
-    
+
     Detects: Training data poisoning, fine-tuning backdoors, trigger words
     """
-    
+
     AGENT_ID = "POI-05"
     DISPLAY_NAME = "☣️ Model & Data Poisoning Detector"
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         """Scan for model poisoning vulnerabilities with confidence scoring"""
         findings = []
-        
+
         # Check for fine-tuning operations
         if re.search(r'fine.?tune|lora|peft', code_context, re.IGNORECASE):
             finetune_confidence = self._calculate_finetune_confidence(code_context)
-            
+
             findings.append({
                 "id": f"{self.AGENT_ID}-{len(findings)}",
                 "title": "Fine-tuning Detected - Verify Data Integrity",
@@ -774,12 +813,12 @@ class ModelDataPoisoningDetector:
                 "agent_source": self.DISPLAY_NAME,
                 "validation_required": finetune_confidence < 60
             })
-        
+
         # Check for dataset loading without validation
         if re.search(r'load_dataset|datasets\.load', code_context, re.IGNORECASE):
             if not re.search(r'validate|verify|scan|check', code_context, re.IGNORECASE):
                 dataset_confidence = self._calculate_dataset_loading_confidence(code_context)
-                
+
                 findings.append({
                     "id": f"{self.AGENT_ID}-{len(findings)}",
                     "title": "Dataset Loaded Without Validation",
@@ -796,58 +835,58 @@ class ModelDataPoisoningDetector:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": dataset_confidence < 70
                 })
-        
+
         return findings
-    
+
     def _calculate_finetune_confidence(self, code_context: str) -> int:
         """Calculate confidence for fine-tuning detection."""
         confidence = 45  # Base confidence (fine-tuning itself isn't bad)
-        
+
         context = code_context.lower()
-        
+
         # Increase if there are security-conscious patterns nearby
         if any(indicator in context for indicator in ['validate', 'verify', 'check', 'trusted', 'secure']):
             confidence += 20
-            
+
         # Decrease if it's clearly example/tutorial code
         if any(indicator in context for indicator in ['#', '//', '/*', 'example', 'demo', 'tutorial']):
             confidence -= 20
-            
+
         # Increase if it looks like actual usage (not just definition)
         if any(indicator in context for indicator in ['=', '(', ')', '.', 'model', 'train']):
             confidence += 15
-            
+
         # Decrease if it's in a test file
         if 'test' in context[:50]:
             confidence -= 15
-            
+
         return max(20, min(85, confidence))
-    
+
     def _calculate_dataset_loading_confidence(self, code_context: str) -> int:
         """Calculate confidence for dataset loading detection."""
         confidence = 55  # Base confidence
-        
+
         # Check context to see if it's likely production code
         context = code_context.lower()
-        
+
         # Decrease if it's clearly example/tutorial code
         if any(indicator in context for indicator in ['#', '//', '/*', 'example', 'demo', 'tutorial', 'sample']):
             confidence -= 25
-            
+
         # Decrease if it's in a test file
         if 'test' in context[:100]:
             confidence -= 15
-            
+
         # Increase if there are security-conscious patterns nearby
         if any(indicator in context for indicator in ['validate', 'verify', 'check', 'signature', 'checksum']):
             confidence += 20
-            
+
         # Increase if it looks like actual usage (not just definition)
         if any(indicator in context for indicator in ['=', '(', ')', '.', 'data', 'dataset', 'load']):
             confidence += 15
-            
+
         return max(25, min(90, confidence))
-    
+
     def _confidence_to_severity(self, confidence: int, base: str = "Medium") -> str:
         """Convert confidence score to severity level with base adjustment."""
         if base == "High":
@@ -864,7 +903,7 @@ class ModelDataPoisoningDetector:
                 return "Medium"
             else:
                 return "Low"
-    
+
     def _confidence_to_cvss(self, confidence: int, base_severity: str) -> float:
         """Convert confidence score to CVSS score."""
         base_scores = {
@@ -873,7 +912,7 @@ class ModelDataPoisoningDetector:
             "Medium": 5.5,
             "Low": 3.0
         }
-        
+
         base_score = base_scores.get(base_severity, 5.0)
         confidence_factor = 0.5 + (confidence / 200)  # 0.5 to 1.0
         adjusted_score = min(10.0, base_score * confidence_factor)
@@ -887,24 +926,24 @@ class ModelDataPoisoningDetector:
 class SensitiveDataLeakageScanner:
     """
     OWASP LLM02: Sensitive Information Disclosure
-    
+
     Detects: Hardcoded secrets/API keys, PII logging in LLM interactions, training data memorization risks
     """
     AGENT_ID = "DAT-06"
     DISPLAY_NAME = "🔐 Sensitive Data Leakage Scanner"
-    
+
     SECRET_PATTERNS = [
         (r'(api[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token)\s*[=:]\s*["\']([A-Za-z0-9_\-\.\+]{16,})["\']', "Hardcoded API Key / Secret Token"),
         (r'OPENAI_API_KEY\s*[=:]\s*["\']sk-[A-Za-z0-9_\-]{20,}', "Hardcoded OpenAI API Key"),
         (r'ANTHROPIC_API_KEY\s*[=:]\s*["\']sk-ant-[A-Za-z0-9_\-]{20,}', "Hardcoded Anthropic API Key"),
         (r'AWS_SECRET_ACCESS_KEY\s*[=:]\s*["\'][A-Za-z0-9/+=]{40}["\']', "Hardcoded AWS Secret Access Key"),
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         findings = []
         if ASTContextFilter.is_test_file(file_path):
             return findings
-            
+
         for pattern, desc in self.SECRET_PATTERNS:
             for match in re.finditer(pattern, code_context, re.IGNORECASE):
                 line_num = code_context[:match.start()].count('\n') + 1
@@ -928,30 +967,39 @@ class SensitiveDataLeakageScanner:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": confidence < 75
                 })
-        
-        # Check for unmasked PII logging in LLM responses/prompts
-        if re.search(r'(logger|logging|print|log)\.(info|debug|warn|error)?\(.*(prompt|response|answer|output|user_input|user_query)', code_context, re.IGNORECASE):
-            if not re.search(r'(mask|redact|sanitize|anonymize|hash|filter)', code_context, re.IGNORECASE):
-                line_num = 1
-                confidence = 70
-                if not ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
-                    findings.append({
-                        "id": f"{self.AGENT_ID}-{len(findings)}",
-                        "title": "Unmasked LLM Prompt/Response Logging",
-                        "category": "LLM02: Sensitive Information Disclosure",
-                        "severity": self._confidence_to_severity(confidence, "Medium"),
-                        "cvss_score": self._confidence_to_cvss(confidence, "Medium"),
-                        "file_path": file_path,
-                        "line_number": line_num,
-                        "code_evidence": "Logging of raw prompt or response variables detected without redaction",
-                        "description": "Raw LLM prompts or responses are logged without redaction or masking. This risks exposing user PII, proprietary data, or system prompts in application logs.",
-                        "remediation": "Implement PII scrubbing and data redaction filters before writing LLM interactions to system logs.",
-                        "cwe_id": "CWE-532",
-                        "owasp_llm_id": "LLM02:2025",
-                        "confidence_score": confidence,
-                        "agent_source": self.DISPLAY_NAME,
-                        "validation_required": confidence < 70
-                    })
+
+        # Check for unmasked PII logging in LLM responses/prompts.
+        logging_pattern = re.compile(
+            r'(?:logger|logging)\.(?:info|debug|warning|warn|error)\s*\([^\n]*'
+            r'\b(?:prompt|response|answer|llm_output|user_input|user_query)\b',
+            re.IGNORECASE,
+        )
+        source_lines = code_context.splitlines()
+        for match in logging_pattern.finditer(code_context):
+            line_num = code_context[:match.start()].count('\n') + 1
+            line_text = source_lines[line_num - 1]
+            if re.search(r'(mask|redact|sanitize|anonymize|hash|filter)', line_text, re.IGNORECASE):
+                continue
+            if ASTContextFilter.is_in_comment_or_docstring(code_context, line_num):
+                continue
+            confidence = 70
+            findings.append({
+                "id": f"{self.AGENT_ID}-{len(findings)}",
+                "title": "Unmasked LLM Prompt/Response Logging",
+                "category": "LLM02: Sensitive Information Disclosure",
+                "severity": self._confidence_to_severity(confidence, "Medium"),
+                "cvss_score": self._confidence_to_cvss(confidence, "Medium"),
+                "file_path": file_path,
+                "line_number": line_num,
+                "code_evidence": line_text.strip()[:100],
+                "description": "Raw LLM prompts or responses are logged without redaction or masking. This risks exposing user PII, proprietary data, or system prompts in application logs.",
+                "remediation": "Implement PII scrubbing and data redaction filters before writing LLM interactions to system logs.",
+                "cwe_id": "CWE-532",
+                "owasp_llm_id": "LLM02:2025",
+                "confidence_score": confidence,
+                "agent_source": self.DISPLAY_NAME,
+                "validation_required": confidence < 70
+            })
         return findings
 
     def _calculate_secret_confidence(self, code_context: str, match: re.Match) -> int:
@@ -981,24 +1029,24 @@ class SupplyChainSecurityAnalyst:
     """
     OWASP LLM03: Supply Chain
     MITRE ATLAS: ML Pipeline Access
-    
+
     Detects: Unsafe deserialization (pickle, joblib, yaml, torch.load without weights_only=True), unpinned dependencies
     """
     AGENT_ID = "SUP-07"
     DISPLAY_NAME = "📦 Supply Chain Security Analyst"
-    
+
     DESERIALIZATION_PATTERNS = [
         (r'pickle\.(load|loads)\(', "Unsafe Pickle Deserialization", "Critical", "CWE-502"),
         (r'joblib\.load\(', "Unsafe Joblib Deserialization", "High", "CWE-502"),
         (r'yaml\.load\([^,]+,\s*Loader=yaml\.Loader\)', "Unsafe PyYAML Loader", "High", "CWE-502"),
         (r'torch\.load\([^)]*weights_only\s*=\s*False', "PyTorch Load with weights_only=False", "Critical", "CWE-502"),
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         findings = []
         if ASTContextFilter.is_test_file(file_path):
             return findings
-            
+
         # Check explicit unsafe deserialization
         for pattern, desc, sev, cwe in self.DESERIALIZATION_PATTERNS:
             for match in re.finditer(pattern, code_context, re.IGNORECASE):
@@ -1023,7 +1071,7 @@ class SupplyChainSecurityAnalyst:
                     "agent_source": self.DISPLAY_NAME,
                     "validation_required": confidence < 75
                 })
-                
+
         # Check torch.load without weights_only keyword at all
         for match in re.finditer(r'torch\.load\([^)]+\)', code_context):
             line_num = code_context[:match.start()].count('\n') + 1
@@ -1067,12 +1115,12 @@ class SupplyChainSecurityAnalyst:
 class OutputHandlingSecurity:
     """
     OWASP LLM05: Improper Output Handling
-    
+
     Detects: LLM outputs passed to eval, exec, os.system, subprocess, or HTML rendering without sanitization
     """
     AGENT_ID = "OUT-08"
     DISPLAY_NAME = "📤 Output Handling Security"
-    
+
     DANGEROUS_SINKS = [
         (r'eval\s*\(\s*(response|output|result|llm_res|res|answer|text|content|code)', "LLM Output Passed to eval()", "Critical", "CWE-94"),
         (r'exec\s*\(\s*(response|output|result|llm_res|res|answer|text|content|code)', "LLM Output Passed to exec()", "Critical", "CWE-94"),
@@ -1080,12 +1128,12 @@ class OutputHandlingSecurity:
         (r'subprocess\.(Popen|run|call|check_output)\s*\(\s*[f]?["\']?[^"\']*(response|output|result|llm_res|res|text|content|cmd).*shell\s*=\s*True', "LLM Output in Subprocess with shell=True", "Critical", "CWE-78"),
         (r'render_template_string\s*\(\s*(response|output|result|llm_res|res|text|content)', "LLM Output in Server-Side Template Rendering", "High", "CWE-1336"),
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         findings = []
         if ASTContextFilter.is_test_file(file_path):
             return findings
-            
+
         for pattern, desc, sev, cwe in self.DANGEROUS_SINKS:
             for match in re.finditer(pattern, code_context, re.IGNORECASE):
                 line_num = code_context[:match.start()].count('\n') + 1
@@ -1119,24 +1167,24 @@ class OutputHandlingSecurity:
 class InfrastructureContainerSecurity:
     """
     MITRE ATLAS: ML Service Interaction / Privilege Escalation
-    
+
     Detects: Docker socket mounts, privileged containers, exposed unauthenticated AI serving endpoints (vLLM/KServe/Ollama)
     """
     AGENT_ID = "INF-09"
     DISPLAY_NAME = "🏗️ Infrastructure & Container Security"
-    
+
     INFRA_PATTERNS = [
         (r'/var/run/docker\.sock', "Docker Socket Mounted in Container", "Critical", "CWE-250", "Mounting the Docker socket inside an inference or agent container allows trivial container escape and full host root takeover."),
         (r'privileged\s*:\s*(true|True)', "Privileged Container Mode Enabled", "High", "CWE-250", "Running AI/ML containers in privileged mode disables Linux security controls and isolation, increasing container escape risk."),
         (r'hostNetwork\s*:\s*(true|True)', "Kubernetes hostNetwork Enabled", "Medium", "CWE-250", "Enabling hostNetwork exposes internal serving ports directly to the node network interface without network policy isolation."),
         (r'0\.0\.0\.0:(8000|11434|8080|5000)', "Exposed AI Serving Port Binding to All Interfaces", "Medium", "CWE-284", "Binding inference services (e.g., Ollama, vLLM, FastAPI) to `0.0.0.0` without strict API token authentication exposes them to network unauthorized access."),
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         findings = []
         if ASTContextFilter.is_test_file(file_path):
             return findings
-            
+
         for pattern, title, sev, cwe, desc in self.INFRA_PATTERNS:
             for match in re.finditer(pattern, code_context):
                 line_num = code_context[:match.start()].count('\n') + 1
@@ -1170,23 +1218,23 @@ class InfrastructureContainerSecurity:
 class RedTeamAdversarialAgent:
     """
     MITRE ATLAS: Exfiltration / Discovery / Model Access
-    
+
     Detects: Unauthenticated model weight export endpoints, embedding inversion exposure, unrestricted model query endpoints
     """
     AGENT_ID = "RED-10"
     DISPLAY_NAME = "🚩 Red Team Adversarial Agent"
-    
+
     RED_PATTERNS = [
         (r'(save_pretrained|torch\.save|export_model)\s*\([^\)]*request\.', "Model Weight Export Exposed via Request Endpoint", "High", "CWE-284", "Model export or serialization methods are tied directly to request handlers without explicit authorization checks, risking model intellectual property exfiltration."),
         (r'(embeddings|encode)\s*\([^\)]*user_input[^\)]*\)(?!\s*#.*auth)', "Unrestricted Embedding API Endpoint Exposed", "Medium", "CWE-200", "Publicly accessible embedding endpoints without query rate limiting allow adversarial embedding inversion attacks to reconstruct proprietary training data or RAG documents."),
         (r'return\s+.*(probabilities|logits|softmax)\s*(#|$)', "Raw Logits / Probabilities Returned to Client", "Low", "CWE-200", "Returning unbounded raw token logits or softmax probabilities directly to client responses facilitates membership inference and model distillation attacks."),
     ]
-    
-    def analyze(self, code_context: str, file_path: str = "") -> List[dict]:
+
+    def analyze(self, code_context: str, file_path: str = "") -> list[dict]:
         findings = []
         if ASTContextFilter.is_test_file(file_path):
             return findings
-            
+
         for pattern, title, sev, cwe, desc in self.RED_PATTERNS:
             for match in re.finditer(pattern, code_context, re.IGNORECASE):
                 line_num = code_context[:match.start()].count('\n') + 1
@@ -1231,19 +1279,19 @@ ALL_SPECIALIST_AGENTS = [
 ]
 
 
-def run_all_agents_on_code(code: str, file_path: str = "") -> List[dict]:
+def run_all_agents_on_code(code: str, file_path: str = "") -> list[dict]:
     """Run all specialist agents on code and aggregate findings"""
     all_findings = []
-    
-    console.print(f"\n  [bold]Deploying 10 Specialist Agents...[/bold]")
-    
+
+    console.print("\n  [bold]Deploying 10 Specialist Agents...[/bold]")
+
     for AgentClass in ALL_SPECIALIST_AGENTS:
         agent = AgentClass()
         console.print(f"    ▶ {agent.DISPLAY_NAME}")
         findings = agent.analyze(code, file_path)
         all_findings.extend(findings)
         console.print(f"      → {len(findings)} findings")
-    
+
     return all_findings
 
 
@@ -1266,9 +1314,7 @@ if __name__ == "__main__":
     def process_code(code):
         return eval(code)
     """
-    
+
     findings = run_all_agents_on_code(test_code, "test.py")
-    print(f"\nTotal findings: {len(findings)}")
     for f in findings:
         validation_req = " (VALIDATION REQ)" if f.get('validation_required') else ""
-        print(f"  - [{f['severity']}] {f['title']} (Conf: {f['confidence_score']}%){validation_req}")

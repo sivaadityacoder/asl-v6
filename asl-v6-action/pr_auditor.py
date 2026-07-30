@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 
 # Set up path to import ASL V6 core modules from the parent directory
-_ROOT = Path(__file__).resolve().parent
+_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(_ROOT))
 
 from v6_ai_infra_security import LLMSecurityReasoningEngine, VerificationGauntlet

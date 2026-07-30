@@ -1,5 +1,5 @@
-name: ASL V6 AI Security CI/CD Gate
-# Enterprise Subscription CI/CD Integration Template
+name: ASL V6.1 Community Security Gate
+# Free local CI/CD workflow; no subscription key is required.
 # Author: Siva Aditya Panuganti (Security Researcher | 6+ AI CVEs)
 
 on:
@@ -29,18 +29,17 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install ASL V6 Engine Install ASL V6 Engine Scanner & Dependencies Dependencies Dependencies
+      - name: Install ASL V6.1 Scanner
         run: |
           python -m pip install --upgrade pip
-          pip install rich requests pydantic urllib3
+          python -m pip install -e .
 
       - name: Execute ASL V6 Verification Gauntlet Scan
         env:
-          ASL_LICENSE_KEY: ${{ secrets.ASL_LICENSE_KEY }} # B2B Commercial Subscription Key
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}   # For Layer 10 AI Patch Synthesis
         run: |
-          echo "🔒 Running ASL V6 AI Security Assessment..."
-          python3 v6_ai_infra_security.py ./
+          echo "🔒 Running ASL V6.1 AI Security Assessment..."
+          asl-v6 ./ --output-root . --fail-on high
 
       - name: Upload ASL V6 Executive Security Report
         uses: actions/upload-artifact@v4

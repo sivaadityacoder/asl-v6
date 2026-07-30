@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asl-v6"
+version = "6.1.0"
+description = "Local AI and LLM repository vulnerability scanner"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "Siva Aditya Panuganti"}]
+dependencies = [
+  "pydantic>=2.0.0",
+  "requests>=2.31.0",
+  "rich>=13.0.0",
+  "urllib3>=2.0.0",
+]
+
+[project.optional-dependencies]
+docker = ["docker>=6.1.0"]
+discovery = ["aiohttp>=3.9.0"]
+
+[project.scripts]
+asl-v6 = "v6_cli:main"
+
+[tool.setuptools]
+py-modules = [
+  "v6_ai_benchmarks",
+  "v6_ai_infra_security",
+  "v6_cli",
+  "v6_dynamic_sandbox",
+  "v6_specialist_agents",
+  "v6_subscription_engine",
+  "v6_version",
+]

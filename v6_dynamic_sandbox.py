@@ -9,17 +9,11 @@ sandbox execution for the ASL V6 platform. Proves whether static heuristic
 findings and local AI infrastructure containers are exploitable in real-time.
 """
 
-import os
-import sys
-import json
-import time
-import shlex
-import urllib.request
-import urllib.error
 import subprocess
-from pathlib import Path
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
 try:
     from rich.console import Console
@@ -28,7 +22,7 @@ try:
 except ImportError:
     class Console:
         def print(self, *args, **kwargs):
-            print(*args)
+            pass
     Console = Console
 
 console = Console()
@@ -37,7 +31,7 @@ console = Console()
 class V6DynamicSandboxEngine:
     """
     Layer 11: Dynamic Docker Sandbox Testing & Live Container Probing Engine.
-    
+
     Capabilities:
       1. Sandbox Snippet Execution: Runs untrusted or suspicious code in an ephemeral,
          isolated Docker micro-container to verify Arbitrary Code Execution (ACE/RCE).
@@ -57,7 +51,7 @@ class V6DynamicSandboxEngine:
         except Exception:
             return False
 
-    def test_snippet_in_sandbox(self, code_snippet: str, vuln_type: str = "General") -> Dict:
+    def test_snippet_in_sandbox(self, code_snippet: str, vuln_type: str = "General") -> dict:
         """
         Executes a vulnerable code pattern inside an ephemeral Docker container sandbox
         with an adversarial probe to verify if ACE/RCE or environment leakage occurs in runtime.
@@ -69,24 +63,17 @@ class V6DynamicSandboxEngine:
                 "verified_exploitable": False
             }
 
-        # Format code payload for safe testing inside container
-        # We test if the vulnerable sink allows system command execution or variable leakage
-        test_payload = (
-            "import sys, os\n"
-            "try:\n"
-            "    # Attempt benign execution verification\n"
-            f"    # Target Code Sink Context: {vuln_type}\n"
-            "    res = os.popen('echo ASL_V6_SANDBOX_EXPLOIT_SUCCESS && id').read()\n"
-            "    print(f'[RUNTIME_PROOF] {res.strip()}')\n"
-            "except Exception as e:\n"
-            "    print(f'[RUNTIME_SAFE] Exception trapped: {e}')\n"
-        )
+        if not isinstance(code_snippet, str) or not code_snippet.strip():
+            raise ValueError("code_snippet must be a non-empty string")
 
         cmd = [
             "docker", "run", "--rm", "--network", "none",
             "--memory", "128m", "--cpus", "0.5",
+            "--pids-limit", "64", "--read-only", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--user", "65534:65534",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
             self.default_image,
-            "python3", "-c", test_payload
+            "python3", "-c", code_snippet,
         ]
 
         start_t = time.time()
@@ -96,16 +83,23 @@ class V6DynamicSandboxEngine:
             stdout = res.stdout.strip()
             stderr = res.stderr.strip()
 
-            is_exploitable = "ASL_V6_SANDBOX_EXPLOIT_SUCCESS" in stdout or "uid=" in stdout
+            proof_markers = ("ASL_V6_SANDBOX_EXPLOIT_SUCCESS", "uid=")
+            is_exploitable = res.returncode == 0 and any(marker in stdout for marker in proof_markers)
 
             return {
                 "status": "COMPLETED",
                 "verified_exploitable": is_exploitable,
+                "vulnerability_type": vuln_type,
+                "return_code": res.returncode,
                 "execution_duration_sec": duration,
                 "container_image": self.default_image,
                 "runtime_stdout": stdout[:500],
                 "runtime_stderr": stderr[:300],
-                "proof_summary": "Runtime Arbitrary Code Execution confirmed in isolated container!" if is_exploitable else "Runtime execution trapped safely."
+                "proof_summary": (
+                    "Runtime code-execution proof observed in the isolated container."
+                    if is_exploitable
+                    else "No runtime code-execution proof marker was observed."
+                ),
             }
         except subprocess.TimeoutExpired:
             return {
@@ -120,7 +114,7 @@ class V6DynamicSandboxEngine:
                 "proof_summary": f"Sandbox launch error: {str(e)}"
             }
 
-    def probe_live_containers(self, target_ports: List[int] = None) -> List[Dict]:
+    def probe_live_containers(self, target_ports: list[int] = None) -> list[dict]:
         """
         Scans local Docker network for active AI application targets (Cyber Range, MCP servers,
         LLM apps) and launches live dynamic HTTP probing (DAST).
@@ -140,7 +134,7 @@ class V6DynamicSandboxEngine:
 
         return active_probes
 
-    def _check_port_http(self, url: str) -> Tuple[bool, str]:
+    def _check_port_http(self, url: str) -> tuple[bool, str]:
         """Checks if HTTP service is responding on target port."""
         try:
             req = urllib.request.Request(url, method="GET", headers={"User-Agent": "ASL-V6-AI-RedTeam/1.0"})
@@ -154,7 +148,7 @@ class V6DynamicSandboxEngine:
         except Exception:
             return False, ""
 
-    def _execute_http_probe(self, base_url: str, banner: str, port: int) -> Dict:
+    def _execute_http_probe(self, base_url: str, banner: str, port: int) -> dict:
         """
         Sends OWASP LLM01/02 dynamic test payloads to active AI services
         to check for unauthenticated access or prompt reflection vulnerabilities.
@@ -203,11 +197,11 @@ if __name__ == "__main__":
     console.print("[bold magenta]ASL V6 Dynamic Sandbox & Live DAST Engine Test[/bold magenta]")
     engine = V6DynamicSandboxEngine()
     console.print(f"Docker Daemon Available: [bold cyan]{engine.docker_available}[/bold cyan]")
-    
+
     console.print("\n[bold yellow]1. Testing Ephemeral Docker Sandbox Execution:[/bold yellow]")
     sb_res = engine.test_snippet_in_sandbox("eval('os.system(\"id\")')", "Unsafe Eval Execution")
     console.print(sb_res)
-    
+
     console.print("\n[bold yellow]2. Probing Live AI Containers on Host:[/bold yellow]")
     probes = engine.probe_live_containers()
     for p in probes:
