@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "ASL V6: Open-Source AI Vulnerability Scanner"
+authors:
+  - family-names: "Panuganti"
+    given-names: "Siva Aditya"
+    affiliation: "Aditya Security Labs"
+repository-code: "https://github.com/sivaadityacoder/asl-v6"
+license: MIT
+version: 6.1.0
+date-released: 2026-07-27
